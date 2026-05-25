@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+// Use the inner lib directly to avoid pdf-parse index.js running test code
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdfParse = require('pdf-parse/lib/pdf-parse.js') as (
+  buffer: Buffer,
+  options?: object
+) => Promise<{ text: string; numpages: number }>
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
@@ -7,8 +14,6 @@ export async function POST(request: NextRequest) {
     if (!file) return NextResponse.json({ error: '未找到文件' }, { status: 400 })
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require('pdf-parse') as (buffer: Buffer) => Promise<{ text: string; numpages: number }>
     const data = await pdfParse(buffer)
 
     let text = data.text

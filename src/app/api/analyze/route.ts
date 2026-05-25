@@ -1,77 +1,108 @@
 import { NextRequest } from 'next/server'
-import OpenAI from 'openai'
+import Anthropic from '@anthropic-ai/sdk'
 
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: 'https://api.deepseek.com',
-})
+const client = new Anthropic()
 
-const AUDIT_REVIEW_PROMPT = `你是一名四大会计师事务所（毕马威香港）的审计高级经理，专长于"穿透式复核法"。请对以下财务报告进行深度扫描。
+const AUDIT_REVIEW_PROMPT = `你是一名专业财务报告复核专家，运用穿透式复核法对财务报告进行深度审查。
 
-执行以下检查，只输出有问题的发现（通过项汇总一句话）。使用严重级别：🔴 高风险 / 🟡 中风险 / ⚪ 低风险
+请严格按以下十一层架构执行复核，输出格式必须完整包含五个部分。
 
-每个问题格式：
-[严重级别] [类别] | 位置：[页码/附注/表格] | 问题：[描述] | AI重算：[如适用] | 报告列示：[如适用] | 差异：[如适用] | 建议：[处理建议]
+【第零层】报告画像识别
+识别并声明：适用准则（IFRS/HKFRS/CAS/US GAAP）/ 审计准则 / 申报场景（上市/年报/半年报/招股书等）/ 货币单位与呈报币种 / 高风险事项（如有：减值、重组、关联交易、业绩预警等）
 
-检查层级：
+【第一层】语言合规与专业表达
+- 语系统一：英式/美式英语全文一致（拼写、日期格式、标点习惯）
+- 语法扫描：主谓一致、标点、大小写、句式完整性
+- 专业术语：无非正式表达、无中式英语、无口语化用词
+- 审计报告法定声明：完整性核验（如适用）
 
-**第一层：语言合规**
-- 英式/美式英语全文一致性（拼写、日期格式）
-- 语法错误（主谓一致、标点、大小写）
-- 专业术语合规（无非正式表达、无中式英语）
-- 审计报告法定声明完整性
+【第二层】全文一致性
+- 实体名称一致（集团名称、子公司名、简称首次定义）
+- 报表名称一致（IFRS下不应使用"Balance Sheet"）
+- 同一金额在不同位置一致（封面、董事会报告、财务报表正文）
 
-**第二层：全文一致性**
-- 实体名称一致
-- 报表名称一致（IFRS下不应用"Balance Sheet"）
-- 同一金额在不同位置一致
+【第三层】序号、页码与索引完整性
+- Note编号连续无断号、无重复
+- 页码引用准确（"See Note X"对应正确）
+- 目录与实际页码一致
 
-**第三层：序号与索引**
-- Note编号连续无断号
-- 页码引用准确
-- 简称首次定义
-
-**第四层：格式合规**
-- 占位符（DRAFT水印、[date]等）——列为"清稿提醒"，非错误
+【第四层】格式合规与版式一致性
+- 占位符检查：[date]、DRAFT水印、空白栏位——列为"清稿提醒"，非错误
 - 日期格式统一
-- 货币单位格式统一
-- 正负数格式统一
+- 货币单位格式统一（RMB'000、HK$'000等）
+- 表格列宽、字体、缩进一致性
+- 正负数方向格式统一（负数用括号还是负号须全文一致）
 
-**第六层：算术精度（零容忍）**
-利润表：验证每个小计（毛利、营业利润、税前利润、净利润、综合收益）及归属拆分
-资产负债表：流动资产合计、非流动资产合计、资产总计、各负债小计、权益合计，验证等式（资产=负债+权益）
-股东权益变动表：每列期初+变动=期末；与资产负债表权益行勾稽
-所有附注表格：纵向（列合计）和横向（期初+变动=期末）双维度核验，最小单位差异必须追溯
+【第五层】线条规范与视觉合规
+- 小计行：单实线上方
+- 合计行：双实线上方
+- 期末余额：双实线上下
+- 各表线条规范全文一致性
 
-**第七层：现金流量表**
-- 期末现金=资产负债表现金+受限现金
-- 期初=上期期末
-- 经营+投资+筹资+汇率=净变动
-- 经营活动起点=利润表净利润
-- 折旧等调整项与附注勾稽
+【第六层】加总精度（零容忍）
+利润表：毛利 → 营业利润 → 税前利润 → 净利润 → 综合收益，各环节逐行验算；归属母公司/少数股东拆分之和等于合计
+资产负债表：流动资产合计、非流动资产合计、资产总计、流动负债合计、非流动负债合计、负债合计、权益合计；资产=负债+权益等式验证
+股东权益变动表：每列期初+本期变动=期末；期末余额与资产负债表权益行逐项勾稽
+所有附注表格：纵向（列合计）和横向（期初+变动=期末）双维度核验；最小单位差异必须追溯原因
+EPS独立重算：分子=归属于普通股股东净利润；加权平均股数核验；Basic与Diluted分别重算
 
-**第八层：EPS**
-- EPS分子=归属于普通股股东净利润
-- Basic/Diluted EPS独立重算
-- 加权平均股数核验
+【第七层】现金流量表全面勾稽
+- 期末现金及现金等价物=资产负债表现金+受限现金（如适用）
+- 期初余额=上期期末余额
+- 经营活动+投资活动+筹资活动+汇率影响=净变动
+- 经营活动起点=利润表净利润（间接法）
+- 折旧、摊销等非现金调整项与附注对应行勾稽
 
-输出结构：
-## 报告画像
-[准则、期间、主体、货币单位、介质类型]
+【第八层】跨报表数据勾稽
+- 利润表净利润 ↔ 现金流量表起点 ↔ 股东权益变动表本期利润
+- 资产负债表期末余额 ↔ 上期对比列
+- NCI归属金额：净利润、综合收益、资产负债表NCI余额三者一致
+- 母公司简表（如有）关键行与合并报表勾稽
 
-## 问题清单
-[按层分组，附严重级别标识]
+【第九层】深层逻辑与矛盾排查
+- 收入确认政策与应收账款周转趋势是否合理
+- 存货减值与毛利率变化是否一致
+- 资本化支出与在建工程转固是否合理
+- 关联交易价格是否市场化，披露是否充分
+- 或有负债、重大诉讼是否披露
 
-## 通过项汇总
-[一句话：X层、Y层——未发现问题]
+【第十层】文件完整性与上市合规专项
+- 全文无遗留占位符、空白栏位、[TBC]等
+- 后续事项（Subsequent Events）披露完整
+- 公允价值层级分类（Level 1/2/3）完整
+- 敏感性分析披露（如适用）
 
-## 待跟进确认事项
-[需管理层提供证据方可定性的事项]
+【第十一层】上市文件跨章节一致性（如适用）
+- 财务报表与管理层讨论与分析（MD&A）数据一致
+- 财务报表与招股书业务描述数据一致
+- 关键绩效指标（KPI）全文一致
 
-## 清稿提醒
-[仅草稿适用：占位符、空白栏位]`
+---
 
-const FINANCIAL_ANALYSIS_PROMPT = `你是一名具备中国企业会计准则（CAS）和IFRS专业知识的财务分析师兼审计高级经理。请对以下财务报告进行财务健康状况评估，识别风险信号和舞弊指标。
+输出格式（严格按以下五部分结构）：
+
+## 第一部分：报告画像与语系声明
+| 项目 | 内容 |
+（表格格式：准则、审计准则、申报场景、货币单位、语系、高风险事项）
+
+## 第二部分：关键数据验算摘要
+| 验算项目 | 报告列示 | AI重算结果 | 结论 |
+（✓ 通过 / ✗ 差异，差异项须注明金额及位置）
+
+## 第三部分：明显问题清单
+格式：[风险级别] [层级] | 位置：[页码/附注编号] | 问题：[具体描述] | 建议：[处理建议]
+风险级别：🔴 高风险 / 🟡 中风险 / ⚪ 低风险/格式问题
+
+## 第四部分：潜在问题——待跟进确认事项
+格式：[编号] 已发现异常：[描述] | 初步分析：[判断] | 需管理层提供：[具体资料]
+
+## 第五部分：质量控制复核总结
+- 综合评级：[可递交 / 建议修改后递交 / 不建议递交]
+- 风险统计：🔴 高风险 X项 / 🟡 中风险 X项 / ⚪ 低风险 X项
+- 是否需要technical consultation：[是/否，原因]
+- 总体评语：[一段话总结]`
+
+const FINANCIAL_ANALYSIS_PROMPT = `你是一名具备中国企业会计准则（CAS）和IFRS专业知识的财务分析师兼审计专家。请对以下财务报告进行财务健康状况评估，识别风险信号和舞弊指标。
 
 使用风险评级：🔴 高风险 / 🟡 中风险 / ✅ 正常。数据不足时注明"N/A（数据不足）"。所有计算须列明公式和数字。
 
@@ -121,7 +152,7 @@ const FINANCIAL_ANALYSIS_PROMPT = `你是一名具备中国企业会计准则（
 - TATA（总应计项目/总资产）
 - 综合M-Score > -1.78: 存在较高利润操纵风险 🔴
 
-**CAS专项高风险科目**
+**专项高风险科目**
 - 在建工程：占总资产比例，多年未转固情况 [>20%且无转固: 🔴]
 - 预付账款：同比增速vs营收增速，关联方占比
 - 其他应收款：余额规模、无法解释的大额、关联方内容
@@ -146,39 +177,40 @@ const FINANCIAL_ANALYSIS_PROMPT = `你是一名具备中国企业会计准则（
 
 export async function POST(request: NextRequest) {
   try {
-    const { text, mode } = await request.json()
+    const { text, mode, standard } = await request.json()
     if (!text) return new Response('缺少报告文本', { status: 400 })
+
+    const standardNote = standard ? `报告适用准则：${standard}\n\n` : ''
 
     let systemPrompt = ''
     let userMessage = ''
 
     if (mode === 'review') {
       systemPrompt = AUDIT_REVIEW_PROMPT
-      userMessage = `请对以下财务报告文本执行完整穿透式复核：\n\n${text}`
+      userMessage = `${standardNote}请对以下财务报告文本执行完整穿透式复核：\n\n${text}`
     } else if (mode === 'analysis') {
       systemPrompt = FINANCIAL_ANALYSIS_PROMPT
-      userMessage = `请对以下财务报告文本执行完整财务分析：\n\n${text}`
+      userMessage = `${standardNote}请对以下财务报告文本执行完整财务分析：\n\n${text}`
     } else {
       systemPrompt = `${AUDIT_REVIEW_PROMPT}\n\n---\n\n${FINANCIAL_ANALYSIS_PROMPT}`
-      userMessage = `请对以下财务报告文本同时执行：\n1. 完整穿透式复核\n2. 完整财务分析\n\n财务报告文本：\n\n${text}`
+      userMessage = `${standardNote}请对以下财务报告文本同时执行：\n1. 完整穿透式复核\n2. 完整财务分析\n\n财务报告文本：\n\n${text}`
     }
 
-    const stream = await client.chat.completions.create({
-      model: 'deepseek-chat',
-      max_tokens: 8000,
+    const stream = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 8192,
       stream: true,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
     })
 
     const encoder = new TextEncoder()
     const readable = new ReadableStream({
       async start(controller) {
-        for await (const chunk of stream) {
-          const text = chunk.choices[0]?.delta?.content
-          if (text) controller.enqueue(encoder.encode(text))
+        for await (const event of stream) {
+          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            controller.enqueue(encoder.encode(event.delta.text))
+          }
         }
         controller.close()
       },
