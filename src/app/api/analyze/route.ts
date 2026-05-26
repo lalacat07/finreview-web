@@ -200,7 +200,7 @@ export async function POST(request: NextRequest) {
     }
 
     const stream = await client.chat.completions.create({
-      model: 'doubao-pro-32k',
+      model: 'doubao-1-5-pro-32k-250115',
       max_tokens: 8192,
       stream: true,
       messages: [
@@ -223,8 +223,9 @@ export async function POST(request: NextRequest) {
     return new Response(readable, {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     })
-  } catch (error) {
-    console.error('Analysis error:', error)
-    return new Response('分析失败，请检查API配置或稍后重试', { status: 500 })
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error)
+    console.error('Analysis error:', msg)
+    return new Response(`分析失败：${msg}`, { status: 500 })
   }
 }
