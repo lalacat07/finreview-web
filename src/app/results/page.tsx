@@ -2,44 +2,76 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 
+type ActiveTab = '数据检查' | '财务健康度'
 type SeverityFilter = 'all' | 'high' | 'medium' | 'low'
 
-interface Section {
+interface LegacySection {
   title: string
   content: string
   index: number
 }
 
-function parseSections(text: string): Section[] {
-  const sectionPattern = /(?=## 第[一二三四五]部分)/g
-  const parts = text.split(sectionPattern)
-  const sections: Section[] = []
+// ─── New-format parser ────────────────────────────────────────────────────────
 
+function parseNewFormat(text: string): Record<string, string> {
+  const keys = ['报告总览', '数据核查', '语法核查', '财务健康度']
+  const result: Record<string, string> = {}
+  const pattern = new RegExp(
+    `## (${keys.join('|')})[\\s\\S]*?(?=\\n## (?:${keys.join('|')})|$)`,
+    'g'
+  )
+  let m
+  while ((m = pattern.exec(text)) !== null) {
+    const header = m[1]
+    const full = m[0]
+    result[header] = full.slice(full.indexOf('\n') + 1).trim()
+  }
+  return result
+}
+
+function isNewFormat(text: string): boolean {
+  return (
+    text.includes('## 报告总览') ||
+    text.includes('## 数据核查') ||
+    text.includes('## 语法核查') ||
+    text.includes('## 财务健康度')
+  )
+}
+
+// ─── Legacy-format parser (kept for backward compat) ─────────────────────────
+
+function parseLegacySections(text: string): LegacySection[] {
+  const parts = text.split(/(?=## 第[一二三四五]部分)/)
+  const sections: LegacySection[] = []
   parts.forEach((part, idx) => {
     if (!part.trim()) return
     const titleMatch = part.match(/^## (.+)/)
     if (titleMatch) {
-      sections.push({
-        title: titleMatch[1],
-        content: part.slice(titleMatch[0].length).trim(),
-        index: idx,
-      })
+      sections.push({ title: titleMatch[1], content: part.slice(titleMatch[0].length).trim(), index: idx })
     } else if (sections.length === 0 && part.trim()) {
       sections.push({ title: '分析结果', content: part.trim(), index: 0 })
     }
   })
-
   return sections
 }
 
-function detectRating(text: string): { label: string; color: string; bg: string; border: string } | null {
-  if (text.includes('不建议递交')) return { label: '不建议递交', color: '#fca5a5', bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.4)' }
-  if (text.includes('建议修改后')) return { label: '建议修改后递交', color: '#fcd34d', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.4)' }
-  if (text.includes('可递交')) return { label: '可递交', color: '#86efac', bg: 'rgba(34,197,94,0.12)', border: 'rgba(34,197,94,0.4)' }
-  return null
+// ─── Overview table parser ────────────────────────────────────────────────────
+
+function parseOverviewTable(content: string): { label: string; value: string }[] {
+  const rows: { label: string; value: string }[] = []
+  const SHOW = ['适用准则', '审计准则', '申报场景', '语系']
+  content.split('\n').forEach(line => {
+    const cells = line.split('|').map(s => s.trim()).filter(Boolean)
+    if (cells.length >= 2 && !cells[0].startsWith('-') && cells[0] !== '项目') {
+      if (SHOW.includes(cells[0])) rows.push({ label: cells[0], value: cells[1] })
+    }
+  })
+  return rows
 }
 
-function getSectionHeaderStyle(sectionNum: number): { bg: string; color: string; accent: string } {
+// ─── Severity helpers ─────────────────────────────────────────────────────────
+
+function getSectionHeaderStyle(n: number) {
   const styles = [
     { bg: 'rgba(59,130,246,0.12)', color: '#93c5fd', accent: '#3b82f6' },
     { bg: 'rgba(34,197,94,0.1)', color: '#86efac', accent: '#22c55e' },
@@ -47,123 +79,223 @@ function getSectionHeaderStyle(sectionNum: number): { bg: string; color: string;
     { bg: 'rgba(249,115,22,0.1)', color: '#fdba74', accent: '#f97316' },
     { bg: 'rgba(168,85,247,0.1)', color: '#d8b4fe', accent: '#a855f7' },
   ]
-  return styles[sectionNum] || styles[0]
+  return styles[n] || styles[0]
 }
 
-export default function ResultsPage() {
-  const [result, setResult] = useState('')
-  const [fileName, setFileName] = useState('')
-  const [copied, setCopied] = useState(false)
-  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all')
-
-  useEffect(() => {
-    setResult(sessionStorage.getItem('analysisResult') || '')
-    setFileName(sessionStorage.getItem('fileName') || '财务报告')
-  }, [])
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(result)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+function detectHealthRating(text: string): { label: string; color: string; bg: string; border: string } | null {
+  if (text.includes('🔴 高风险') || text.includes('高风险')) {
+    const isHigh = /整体.*?🔴|🔴.*?高风险/.test(text)
+    if (isHigh) return { label: '高风险', color: '#fca5a5', bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.4)' }
   }
+  if (text.includes('🟡 中等风险') || /整体.*?🟡/.test(text))
+    return { label: '中等风险', color: '#fcd34d', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.4)' }
+  if (text.includes('✅ 低风险') || /整体.*?✅/.test(text))
+    return { label: '低风险', color: '#86efac', bg: 'rgba(34,197,94,0.12)', border: 'rgba(34,197,94,0.4)' }
+  return null
+}
 
-  if (!result) return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#0f1117', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f1f5f9' }}>
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: '48px', marginBottom: '16px' }}>📭</div>
-        <p style={{ color: '#94a3b8', marginBottom: '24px' }}>未找到分析结果，请重新上传报告</p>
-        <Link href="/analyze" style={{ backgroundColor: '#3b82f6', color: 'white', padding: '12px 24px', borderRadius: '8px', textDecoration: 'none' }}>重新分析</Link>
-      </div>
+function isAllPass(content: string): boolean {
+  return content.includes('✅') && (
+    content.includes('全部通过') || content.includes('未发现') || content.includes('无语言问题') || content.includes('无问题')
+  )
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function OverviewCards({ content }: { content: string }) {
+  const fields = parseOverviewTable(content)
+  if (fields.length === 0) return null
+  return (
+    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '28px' }}>
+      {fields.map(f => (
+        <div key={f.label} style={{
+          backgroundColor: '#1a1d27',
+          border: '1px solid #2d3048',
+          borderRadius: '10px',
+          padding: '14px 18px',
+          minWidth: '150px',
+          flex: '1',
+        }}>
+          <div style={{ color: '#64748b', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>{f.label}</div>
+          <div style={{ color: '#e2e8f0', fontSize: '14px', fontWeight: 600 }}>{f.value}</div>
+        </div>
+      ))}
     </div>
   )
+}
 
-  const sections = parseSections(result)
-  const hasSections = sections.some(s => s.title.includes('部分'))
-
+function CheckSubModule({ title, content, icon }: { title: string; content: string; icon: string }) {
+  const pass = isAllPass(content)
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#0f1117', color: '#f1f5f9' }}>
-      <style>{`
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-      `}</style>
-
-      {/* Header */}
-      <div className="no-print" style={{ borderBottom: '1px solid #2d3048', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, backgroundColor: '#0f1117', zIndex: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <Link href="/analyze" style={{ color: '#94a3b8', textDecoration: 'none', fontSize: '14px' }}>← 重新分析</Link>
-          <span style={{ color: '#2d3048' }}>|</span>
-          <span style={{ fontSize: '13px', color: '#94a3b8', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fileName}</span>
-        </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={handleCopy} style={{
-            backgroundColor: copied ? '#22c55e' : '#1a1d27', border: '1px solid #2d3048',
-            color: copied ? 'white' : '#94a3b8', padding: '7px 16px', borderRadius: '7px',
-            cursor: 'pointer', fontSize: '13px', transition: 'all 0.2s',
+    <div style={{ backgroundColor: '#1a1d27', border: '1px solid #2d3048', borderRadius: '12px', overflow: 'hidden' }}>
+      <div style={{ padding: '14px 20px', borderBottom: '1px solid #2d3048', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ fontSize: '16px' }}>{icon}</span>
+        <span style={{ fontWeight: 700, fontSize: '14px', color: '#e2e8f0' }}>{title}</span>
+        {pass && (
+          <span style={{
+            marginLeft: 'auto',
+            backgroundColor: 'rgba(34,197,94,0.12)',
+            border: '1px solid rgba(34,197,94,0.3)',
+            color: '#86efac',
+            fontSize: '12px',
+            fontWeight: 700,
+            padding: '2px 10px',
+            borderRadius: '5px',
           }}>
-            {copied ? '✓ 已复制' : '复制结果'}
-          </button>
-          <button onClick={() => window.print()} style={{
-            backgroundColor: '#1a1d27', border: '1px solid #2d3048',
-            color: '#94a3b8', padding: '7px 16px', borderRadius: '7px',
-            cursor: 'pointer', fontSize: '13px',
-          }}>
-            导出 PDF
-          </button>
-        </div>
-      </div>
-
-      <div style={{ maxWidth: '960px', margin: '0 auto', padding: '32px 24px' }}>
-        {hasSections ? (
-          <StructuredView sections={sections} severityFilter={severityFilter} setSeverityFilter={setSeverityFilter} />
-        ) : (
-          <MarkdownRenderer text={result} />
+            ✓ 全部通过
+          </span>
         )}
       </div>
+      <div style={{ padding: '16px 20px' }}>
+        {content
+          ? <MarkdownRenderer text={content} />
+          : <p style={{ color: '#4b5563', fontSize: '13px', margin: 0 }}>暂无数据</p>}
+      </div>
     </div>
   )
 }
 
-function StructuredView({
+function ComingSoonModule() {
+  return (
+    <div style={{ backgroundColor: '#1a1d27', border: '1px solid #2d3048', borderRadius: '12px', overflow: 'hidden', opacity: 0.55 }}>
+      <div style={{ padding: '14px 20px', borderBottom: '1px solid #2d3048', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ fontSize: '16px' }}>📋</span>
+        <span style={{ fontWeight: 700, fontSize: '14px', color: '#94a3b8' }}>披露合规性检查</span>
+        <span style={{
+          marginLeft: 'auto',
+          backgroundColor: 'rgba(148,163,184,0.1)',
+          border: '1px solid rgba(148,163,184,0.2)',
+          color: '#64748b',
+          fontSize: '12px',
+          fontWeight: 700,
+          padding: '2px 10px',
+          borderRadius: '5px',
+        }}>
+          即将上线
+        </span>
+      </div>
+      <div style={{ padding: '24px 20px', textAlign: 'center' }}>
+        <p style={{ color: '#4b5563', fontSize: '13px', margin: 0 }}>披露合规性检查功能正在开发中，即将上线</p>
+      </div>
+    </div>
+  )
+}
+
+function HealthSection({ content }: { content: string }) {
+  const rating = detectHealthRating(content)
+  return (
+    <div style={{ backgroundColor: '#1a1d27', border: '1px solid #2d3048', borderRadius: '12px', overflow: 'hidden' }}>
+      <div style={{ padding: '14px 20px', borderBottom: '1px solid #2d3048', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ fontSize: '16px' }}>📊</span>
+        <span style={{ fontWeight: 700, fontSize: '14px', color: '#e2e8f0' }}>财务健康度分析</span>
+        {rating && (
+          <span style={{
+            marginLeft: 'auto',
+            backgroundColor: rating.bg,
+            border: `1px solid ${rating.border}`,
+            color: rating.color,
+            fontSize: '13px',
+            fontWeight: 700,
+            padding: '3px 12px',
+            borderRadius: '6px',
+          }}>
+            {rating.label}
+          </span>
+        )}
+      </div>
+      <div style={{ padding: '20px' }}>
+        {content
+          ? <MarkdownRenderer text={content} />
+          : <p style={{ color: '#4b5563', fontSize: '13px', margin: 0 }}>暂无财务分析数据，请选择包含"财务健康度"的分析模式</p>}
+      </div>
+    </div>
+  )
+}
+
+// ─── Main view components ─────────────────────────────────────────────────────
+
+function NewStructuredView({ sections }: { sections: Record<string, string> }) {
+  const [activeTab, setActiveTab] = useState<ActiveTab>('数据检查')
+  const overview = sections['报告总览'] || ''
+  const dataCheck = sections['数据核查'] || ''
+  const langCheck = sections['语法核查'] || ''
+  const health = sections['财务健康度'] || ''
+
+  const tabs: ActiveTab[] = ['数据检查', '财务健康度']
+
+  return (
+    <div>
+      {/* Layer 1: 报告总览 */}
+      {overview && <OverviewCards content={overview} />}
+
+      {/* Layer 2: Tab switcher */}
+      <div style={{ display: 'flex', gap: '2px', marginBottom: '20px', borderBottom: '1px solid #2d3048' }}>
+        {tabs.map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              padding: '10px 24px',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 600,
+              backgroundColor: 'transparent',
+              color: activeTab === tab ? '#e2e8f0' : '#64748b',
+              borderBottom: activeTab === tab ? '2px solid #3b82f6' : '2px solid transparent',
+              marginBottom: '-1px',
+              transition: 'all 0.15s',
+            }}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {/* Layer 3a: 数据检查 */}
+      {activeTab === '数据检查' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <CheckSubModule title="数据核查" content={dataCheck} icon="🔢" />
+          <CheckSubModule title="语法核查" content={langCheck} icon="📝" />
+          <ComingSoonModule />
+        </div>
+      )}
+
+      {/* Layer 3b: 财务健康度 */}
+      {activeTab === '财务健康度' && <HealthSection content={health} />}
+    </div>
+  )
+}
+
+function LegacyStructuredView({
   sections,
   severityFilter,
   setSeverityFilter,
 }: {
-  sections: Section[]
+  sections: LegacySection[]
   severityFilter: SeverityFilter
   setSeverityFilter: (f: SeverityFilter) => void
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {sections.map((section, idx) => {
-        const sectionNum = idx
-        const style = getSectionHeaderStyle(sectionNum)
+        const style = getSectionHeaderStyle(idx)
         const isSection3 = section.title.includes('第三部分') || section.title.includes('明显问题')
-        const isSection5 = section.title.includes('第五部分') || section.title.includes('质量控制')
-        const rating = isSection5 ? detectRating(section.content) : null
 
         return (
           <div key={section.index} style={{ backgroundColor: '#1a1d27', border: '1px solid #2d3048', borderRadius: '12px', overflow: 'hidden' }}>
-            {/* Section header */}
             <div style={{ backgroundColor: style.bg, borderBottom: `1px solid ${style.accent}33`, padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <span style={{ display: 'inline-block', width: '3px', height: '18px', backgroundColor: style.accent, borderRadius: '2px', flexShrink: 0 }} />
                 <span style={{ color: style.color, fontWeight: 700, fontSize: '15px' }}>{section.title}</span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                {rating && (
-                  <span style={{ backgroundColor: rating.bg, border: `1px solid ${rating.border}`, color: rating.color, fontSize: '13px', fontWeight: 700, padding: '3px 12px', borderRadius: '6px' }}>
-                    {rating.label}
-                  </span>
-                )}
-                {isSection3 && (
-                  <SeverityFilterButtons filter={severityFilter} setFilter={setSeverityFilter} />
-                )}
-              </div>
+              {isSection3 && (
+                <SeverityFilterButtons filter={severityFilter} setFilter={setSeverityFilter} />
+              )}
             </div>
-
-            {/* Section content */}
             <div style={{ padding: '20px' }}>
               {isSection3 ? (
-                <FilteredSection3 content={section.content} filter={severityFilter} />
+                <FilteredLegacySection content={section.content} filter={severityFilter} />
               ) : (
                 <MarkdownRenderer text={section.content} />
               )}
@@ -198,19 +330,20 @@ function SeverityFilterButtons({ filter, setFilter }: { filter: SeverityFilter; 
   )
 }
 
-function FilteredSection3({ content, filter }: { content: string; filter: SeverityFilter }) {
-  const lines = content.split('\n')
-  const filteredLines = lines.filter(line => {
+function FilteredLegacySection({ content, filter }: { content: string; filter: SeverityFilter }) {
+  const lines = content.split('\n').filter(line => {
     if (filter === 'all') return true
     if (filter === 'high') return line.includes('🔴') || !line.match(/[🔴🟡⚪]/)
     if (filter === 'medium') return line.includes('🟡') || !line.match(/[🔴🟡⚪]/)
     if (filter === 'low') return line.includes('⚪') || !line.match(/[🔴🟡⚪]/)
     return true
   })
-  return <MarkdownRenderer text={filteredLines.join('\n')} />
+  return <MarkdownRenderer text={lines.join('\n')} />
 }
 
-function MarkdownRenderer({ text }: { text: string; streaming?: boolean }) {
+// ─── Markdown renderer ────────────────────────────────────────────────────────
+
+function MarkdownRenderer({ text }: { text: string }) {
   const lines = text.split('\n')
   const elements: React.ReactNode[] = []
 
@@ -290,5 +423,80 @@ function renderInline(text: string): React.ReactNode {
           : <span key={i}>{p}</span>
       )}
     </>
+  )
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+export default function ResultsPage() {
+  const [result, setResult] = useState('')
+  const [fileName, setFileName] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all')
+
+  useEffect(() => {
+    setResult(sessionStorage.getItem('analysisResult') || '')
+    setFileName(sessionStorage.getItem('fileName') || '财务报告')
+  }, [])
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(result)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  if (!result) return (
+    <div style={{ minHeight: '100vh', backgroundColor: '#0f1117', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f1f5f9' }}>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>📭</div>
+        <p style={{ color: '#94a3b8', marginBottom: '24px' }}>未找到分析结果，请重新上传报告</p>
+        <Link href="/analyze" style={{ backgroundColor: '#3b82f6', color: 'white', padding: '12px 24px', borderRadius: '8px', textDecoration: 'none' }}>重新分析</Link>
+      </div>
+    </div>
+  )
+
+  const newFormat = isNewFormat(result)
+  const newSections = newFormat ? parseNewFormat(result) : {}
+  const legacySections = !newFormat ? parseLegacySections(result) : []
+
+  return (
+    <div style={{ minHeight: '100vh', backgroundColor: '#0f1117', color: '#f1f5f9' }}>
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }`}</style>
+
+      {/* Header */}
+      <div className="no-print" style={{ borderBottom: '1px solid #2d3048', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, backgroundColor: '#0f1117', zIndex: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <Link href="/analyze" style={{ color: '#94a3b8', textDecoration: 'none', fontSize: '14px' }}>← 重新分析</Link>
+          <span style={{ color: '#2d3048' }}>|</span>
+          <span style={{ fontSize: '13px', color: '#94a3b8', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fileName}</span>
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={handleCopy} style={{
+            backgroundColor: copied ? '#22c55e' : '#1a1d27', border: '1px solid #2d3048',
+            color: copied ? 'white' : '#94a3b8', padding: '7px 16px', borderRadius: '7px',
+            cursor: 'pointer', fontSize: '13px', transition: 'all 0.2s',
+          }}>
+            {copied ? '✓ 已复制' : '复制结果'}
+          </button>
+          <button onClick={() => window.print()} style={{
+            backgroundColor: '#1a1d27', border: '1px solid #2d3048',
+            color: '#94a3b8', padding: '7px 16px', borderRadius: '7px',
+            cursor: 'pointer', fontSize: '13px',
+          }}>
+            导出 PDF
+          </button>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: '960px', margin: '0 auto', padding: '32px 24px' }}>
+        {newFormat ? (
+          <NewStructuredView sections={newSections} />
+        ) : legacySections.some(s => s.title.includes('部分')) ? (
+          <LegacyStructuredView sections={legacySections} severityFilter={severityFilter} setSeverityFilter={setSeverityFilter} />
+        ) : (
+          <MarkdownRenderer text={result} />
+        )}
+      </div>
+    </div>
   )
 }

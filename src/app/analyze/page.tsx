@@ -109,7 +109,7 @@ export default function AnalyzePage() {
         {/* Sticky header */}
         <div className="no-print" style={{ borderBottom: '1px solid #2d3048', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, backgroundColor: '#0f1117', zIndex: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <span style={{ fontWeight: 700, color: '#3b82f6' }}>财报穿透</span>
+            <span style={{ fontWeight: 800, color: '#3b82f6' }}>Fin</span><span style={{ fontWeight: 800, color: '#f1f5f9' }}>Guard</span>
             <span style={{ color: '#4b5563', fontSize: '13px' }}>|</span>
             <span style={{ fontSize: '13px', color: '#94a3b8', maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file?.name}</span>
           </div>
