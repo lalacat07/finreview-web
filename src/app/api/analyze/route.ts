@@ -1,10 +1,17 @@
 import { NextRequest } from 'next/server'
 import OpenAI from 'openai'
 
+export const maxDuration = 60 // Vercel Pro allows up to 300s, Hobby allows 60s
+export const dynamic = 'force-dynamic'
+
 const client = new OpenAI({
-  apiKey: process.env.ARK_API_KEY,
-  baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
+  apiKey: process.env.DEEPSEEK_API_KEY || process.env.ARK_API_KEY,
+  baseURL: process.env.DEEPSEEK_API_KEY
+    ? 'https://api.deepseek.com'
+    : 'https://ark.cn-beijing.volces.com/api/v3',
 })
+
+const MODEL = process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : 'doubao-1-5-pro-32k-250115'
 
 const AUDIT_REVIEW_PROMPT = `你是一名专业财务报告复核专家，运用穿透式复核法对财务报告进行深度审查。
 
@@ -200,7 +207,7 @@ export async function POST(request: NextRequest) {
     }
 
     const stream = await client.chat.completions.create({
-      model: 'doubao-1-5-pro-32k-250115',
+      model: MODEL,
       max_tokens: 8192,
       stream: true,
       messages: [
