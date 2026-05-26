@@ -1,7 +1,10 @@
 import { NextRequest } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
 
-const client = new Anthropic()
+const client = new OpenAI({
+  apiKey: process.env.ARK_API_KEY,
+  baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
+})
 
 const AUDIT_REVIEW_PROMPT = `你是一名专业财务报告复核专家，运用穿透式复核法对财务报告进行深度审查。
 
@@ -196,21 +199,22 @@ export async function POST(request: NextRequest) {
       userMessage = `${standardNote}请对以下财务报告文本同时执行：\n1. 完整穿透式复核\n2. 完整财务分析\n\n财务报告文本：\n\n${text}`
     }
 
-    const stream = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+    const stream = await client.chat.completions.create({
+      model: 'doubao-pro-32k',
       max_tokens: 8192,
       stream: true,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userMessage }],
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ],
     })
 
     const encoder = new TextEncoder()
     const readable = new ReadableStream({
       async start(controller) {
-        for await (const event of stream) {
-          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-            controller.enqueue(encoder.encode(event.delta.text))
-          }
+        for await (const chunk of stream) {
+          const text = chunk.choices[0]?.delta?.content
+          if (text) controller.enqueue(encoder.encode(text))
         }
         controller.close()
       },
