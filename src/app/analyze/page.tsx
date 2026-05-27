@@ -1,32 +1,84 @@
 'use client'
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 
 type Mode = 'review' | 'analysis' | 'both'
 type Stage = 'upload' | 'streaming' | 'done'
-type Standard = 'IFRS / HKFRS' | 'CAS 中国会计准则' | 'US GAAP'
+type Standard = '' | 'CAS 中国企业会计准则' | 'IFRS / HKFRS' | 'US GAAP'
+
+const NAV_BG = '#0b1220'
+const NAV_TEXT = '#e2e8f0'
+const BRAND = '#1e40af'
+const BRAND_LIGHT = '#2563eb'
+const BRAND_TINT = '#eff6ff'
+const BORDER = '#e2e8f0'
+const TEXT_PRIMARY = '#0f172a'
+const TEXT_SECONDARY = '#334155'
+const TEXT_MUTED = '#64748b'
+const TEXT_FAINT = '#94a3b8'
+
+/* ───────────────────────────────────────────────────────────────
+ * 解析阶段定义（用户可视化感受系统在做什么）
+ * ──────────────────────────────────────────────────────────────*/
+
+const STAGES = [
+  { key: 'upload', label: '上传并读取文档', desc: '校验文件并加载到处理引擎' },
+  { key: 'structure', label: '识别报告结构', desc: '识别报告类型、期间、适用准则、审计师' },
+  { key: 'extract', label: '提取财务报表及附注数据', desc: '解析主表、附注、关键指标' },
+  { key: 'crosscheck', label: '检查报表勾稽关系', desc: '主表平衡 / 跨表勾稽 / 附注一致性' },
+  { key: 'risk', label: '分析披露完整性与风险点', desc: '披露口径、异常波动、经营质量信号' },
+  { key: 'compose', label: '生成检查结果', desc: '整理结构化复核与健康度分析' },
+] as const
+
+type StageKey = (typeof STAGES)[number]['key']
 
 export default function AnalyzePage() {
+  const router = useRouter()
   const [file, setFile] = useState<File | null>(null)
   const [mode, setMode] = useState<Mode>('both')
-  const [standard, setStandard] = useState<Standard>('IFRS / HKFRS')
+  const [standard, setStandard] = useState<Standard>('') // 默认空 = 让系统自动识别
+  const [showStandard, setShowStandard] = useState(false) // 高级：手动覆盖
   const [stage, setStage] = useState<Stage>('upload')
-  const [progress, setProgress] = useState('')
+  const [currentStage, setCurrentStage] = useState<StageKey>('upload')
   const [streamedText, setStreamedText] = useState('')
   const [error, setError] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const [showModal, setShowModal] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const resultRef = useRef<HTMLDivElement>(null)
+  const elapsedTimer = useRef<NodeJS.Timeout | null>(null)
 
+  /* ─ 计时器 ─ */
+  useEffect(() => {
+    if (stage === 'streaming') {
+      const start = Date.now()
+      elapsedTimer.current = setInterval(() => {
+        setElapsed(Math.floor((Date.now() - start) / 1000))
+      }, 500)
+      return () => {
+        if (elapsedTimer.current) clearInterval(elapsedTimer.current)
+      }
+    }
+  }, [stage])
+
+  /* ─ 文件处理 ─ */
   const handleFile = (f: File) => {
-    if (f.type !== 'application/pdf') { setError('请上传PDF文件'); return }
-    if (f.size > 50 * 1024 * 1024) { setError('文件不超过50MB'); return }
-    setError(''); setFile(f)
+    if (f.type !== 'application/pdf') {
+      setError('当前仅支持 PDF 格式财务报告')
+      return
+    }
+    if (f.size > 50 * 1024 * 1024) {
+      setError('文件超出 50MB 限制，请压缩或拆分后再上传')
+      return
+    }
+    setError('')
+    setFile(f)
   }
 
   const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setDragOver(false)
+    e.preventDefault()
+    setDragOver(false)
     if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0])
   }
 
@@ -38,20 +90,32 @@ export default function AnalyzePage() {
   const handleConfirm = async () => {
     setShowModal(false)
     if (!file) return
-    setError(''); setStreamedText(''); setStage('streaming')
+    setError('')
+    setStreamedText('')
+    setStage('streaming')
+    setCurrentStage('upload')
+
     try {
-      setProgress('正在解析PDF文档...')
+      // 阶段 1：上传并读取
+      setCurrentStage('upload')
       const formData = new FormData()
       formData.append('file', file)
       const extractRes = await fetch('/api/extract', { method: 'POST', body: formData })
       if (!extractRes.ok) {
         const body = await extractRes.json().catch(() => ({}))
-        throw new Error(body.error || 'PDF解析失败')
+        throw new Error(body.error || 'PDF 解析失败')
       }
-      const { text, pageCount, truncated } = await extractRes.json()
+      const { text } = await extractRes.json()
 
-      setProgress(`已提取 ${pageCount} 页${truncated ? '（已截取前8万字符）' : ''}，AI 分析中...`)
+      // 阶段 2：识别结构（短暂展示）
+      setCurrentStage('structure')
+      await sleep(450)
 
+      // 阶段 3：提取数据
+      setCurrentStage('extract')
+      await sleep(450)
+
+      // 启动流式分析
       const analyzeRes = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -59,22 +123,40 @@ export default function AnalyzePage() {
       })
       if (!analyzeRes.ok) throw new Error('分析请求失败')
 
+      // 阶段 4–6 随流式输出推进
+      setCurrentStage('crosscheck')
+
       const reader = analyzeRes.body!.getReader()
       const decoder = new TextDecoder()
       let full = ''
-      setProgress('')
+      let advanced5 = false
+      let advanced6 = false
+
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
         const chunk = decoder.decode(value)
         full += chunk
         setStreamedText(full)
-        setTimeout(() => resultRef.current?.scrollTo({ top: resultRef.current.scrollHeight, behavior: 'smooth' }), 0)
+
+        // 阶段推进：根据已生成内容粗略推断
+        if (!advanced5 && (full.includes('财务数据复核') || full.length > 1200)) {
+          setCurrentStage('risk')
+          advanced5 = true
+        }
+        if (!advanced6 && (full.includes('财务健康度分析') || full.length > 3000)) {
+          setCurrentStage('compose')
+          advanced6 = true
+        }
       }
+
       sessionStorage.setItem('analysisResult', full)
       sessionStorage.setItem('analysisMode', mode)
       sessionStorage.setItem('fileName', file.name)
+      sessionStorage.setItem('analysisStandard', standard)
       setStage('done')
+      // 直接跳转到结果页（产品化体验）
+      router.push('/results')
     } catch (err) {
       setError(err instanceof Error ? err.message : '分析过程中出现错误，请重试')
       setStage('upload')
@@ -82,219 +164,519 @@ export default function AnalyzePage() {
   }
 
   const handleReset = () => {
-    setStage('upload'); setStreamedText(''); setFile(null); setError('')
+    setStage('upload')
+    setStreamedText('')
+    setFile(null)
+    setError('')
+    setElapsed(0)
   }
 
   const standards: { value: Standard; label: string; desc: string }[] = [
+    { value: 'CAS 中国企业会计准则', label: 'CAS 中国企业会计准则', desc: '适用 A 股、中国内地企业报告' },
     { value: 'IFRS / HKFRS', label: 'IFRS / HKFRS', desc: '适用香港上市、国际准则报告' },
-    { value: 'CAS 中国会计准则', label: 'CAS 中国会计准则', desc: '适用A股、中国内地企业报告' },
     { value: 'US GAAP', label: 'US GAAP', desc: '适用美股上市、美国准则报告' },
   ]
 
   const modes = [
-    { value: 'review' as Mode, icon: '🔍', label: '穿透式复核', desc: '合规检查 · 数字勾稽 · 格式审查 · 附注核验' },
-    { value: 'analysis' as Mode, icon: '📊', label: '财务分析', desc: '财务比率 · Beneish舞弊模型 · CAS专项风险' },
-    { value: 'both' as Mode, icon: '🛡️', label: '完整分析', desc: '以上全部', badge: '推荐' },
+    { value: 'review' as Mode, icon: '🔢', label: '数据复核', desc: '报表勾稽 · 附注一致性 · 披露自查' },
+    { value: 'analysis' as Mode, icon: '📊', label: '健康度分析', desc: '盈利 · 偿债 · 现金流 · 风险信号' },
+    { value: 'both' as Mode, icon: '🛡️', label: '完整分析', desc: '数据复核 + 健康度分析', badge: '推荐' },
   ]
 
-  // ── STREAMING / DONE VIEW ──────────────────────────────────────────
+  /* ───────────────────────────────────────────────────────────────
+   *  STREAMING 视图 — 产品化解析过程页
+   *  采用阶段进度 + 当前任务卡片 + 扫描动画，让用户清晰感受系统正在工作
+   *  done 状态也保留此页面，避免跳转到结果页前闪回上传页
+   * ──────────────────────────────────────────────────────────────*/
   if (stage === 'streaming' || stage === 'done') {
-    return (
-      <div style={{ minHeight: '100vh', backgroundColor: '#0f1117', color: '#f1f5f9', display: 'flex', flexDirection: 'column' }}>
-        <style>{`
-          @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-          @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
-        `}</style>
+    const stageIdx = STAGES.findIndex((s) => s.key === currentStage)
+    const progressPct = Math.round(((stageIdx + 1) / STAGES.length) * 100)
 
-        {/* Sticky header */}
-        <div className="no-print" style={{ borderBottom: '1px solid #2d3048', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, backgroundColor: '#0f1117', zIndex: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <span style={{ fontWeight: 800, color: '#3b82f6' }}>Fin</span><span style={{ fontWeight: 800, color: '#f1f5f9' }}>Guard</span>
-            <span style={{ color: '#4b5563', fontSize: '13px' }}>|</span>
-            <span style={{ fontSize: '13px', color: '#94a3b8', maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file?.name}</span>
-          </div>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            {stage === 'streaming' && (
-              <span style={{ fontSize: '13px', color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#3b82f6', animation: 'pulse 1s infinite' }} />
-                AI 分析中
-              </span>
-            )}
-            {stage === 'done' && (
-              <>
-                <button
-                  onClick={() => navigator.clipboard.writeText(streamedText)}
-                  style={{ backgroundColor: '#1a1d27', border: '1px solid #2d3048', color: '#94a3b8', padding: '7px 14px', borderRadius: '7px', cursor: 'pointer', fontSize: '13px' }}
-                >
-                  复制结果
-                </button>
-                <button
-                  onClick={() => window.print()}
-                  style={{ backgroundColor: '#1a1d27', border: '1px solid #2d3048', color: '#94a3b8', padding: '7px 14px', borderRadius: '7px', cursor: 'pointer', fontSize: '13px' }}
-                >
-                  导出 PDF
-                </button>
-              </>
-            )}
-            <button onClick={handleReset} style={{ backgroundColor: 'transparent', border: '1px solid #2d3048', color: '#64748b', padding: '7px 14px', borderRadius: '7px', cursor: 'pointer', fontSize: '13px' }}>
-              重新上传
+    return (
+      <div style={{ minHeight: '100vh', backgroundColor: '#f6f8fb', color: TEXT_PRIMARY }}>
+        <TopNav active="analyze" />
+
+        <div style={{ maxWidth: '760px', margin: '0 auto', padding: '40px 24px 64px' }}>
+          {/* 顶部状态条 */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '20px',
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '20px', fontWeight: 800, color: TEXT_PRIMARY, marginBottom: '4px' }}>
+                正在执行财务报告智能审阅
+              </div>
+              <div style={{ fontSize: '13px', color: TEXT_MUTED }}>
+                文件：{file?.name} · 已处理 {elapsed}s
+              </div>
+            </div>
+            <button
+              onClick={handleReset}
+              style={{
+                backgroundColor: '#ffffff',
+                border: `1px solid ${BORDER}`,
+                color: TEXT_SECONDARY,
+                padding: '8px 16px',
+                borderRadius: '7px',
+                cursor: 'pointer',
+                fontSize: '13px',
+              }}
+            >
+              取消并重新上传
             </button>
           </div>
-        </div>
 
-        {/* Progress bar */}
-        {progress && (
-          <div style={{ backgroundColor: 'rgba(59,130,246,0.08)', borderBottom: '1px solid rgba(59,130,246,0.2)', padding: '10px 24px', fontSize: '13px', color: '#93c5fd' }}>
-            ⏳ {progress}
-          </div>
-        )}
-
-        {/* Streaming output */}
-        <div
-          ref={resultRef}
-          style={{ flex: 1, overflowY: 'auto', padding: '28px 24px', maxWidth: '960px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}
-        >
-          {streamedText ? (
-            <MarkdownRenderer text={streamedText} streaming={stage === 'streaming'} />
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#64748b', padding: '48px 0' }}>
-              <LoadingDots />
-              <span>{progress || '正在初始化...'}</span>
+          {/* 主进度卡片 */}
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              border: `1px solid ${BORDER}`,
+              borderRadius: '14px',
+              padding: '28px',
+              boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+              marginBottom: '20px',
+            }}
+          >
+            {/* 进度条 */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '12px',
+              }}
+            >
+              <span style={{ fontSize: '13px', fontWeight: 600, color: TEXT_SECONDARY }}>
+                整体进度
+              </span>
+              <span style={{ fontSize: '13px', fontWeight: 700, color: BRAND }}>{progressPct}%</span>
             </div>
-          )}
+            <div
+              style={{
+                height: '8px',
+                backgroundColor: '#f1f5f9',
+                borderRadius: '999px',
+                overflow: 'hidden',
+                position: 'relative',
+                marginBottom: '24px',
+              }}
+            >
+              <div
+                style={{
+                  height: '100%',
+                  width: `${progressPct}%`,
+                  background: `linear-gradient(90deg, ${BRAND_LIGHT}, ${BRAND})`,
+                  borderRadius: '999px',
+                  transition: 'width 0.5s ease',
+                  position: 'relative',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background:
+                      'linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent)',
+                    animation: 'fg-shimmer 1.4s infinite',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* 当前任务卡片：扫描动画 */}
+            <CurrentTaskCard stageKey={currentStage} />
+
+            {/* 阶段列表 */}
+            <div style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {STAGES.map((s, i) => {
+                const status: 'done' | 'active' | 'pending' =
+                  i < stageIdx ? 'done' : i === stageIdx ? 'active' : 'pending'
+                return <StageRow key={s.key} idx={i + 1} label={s.label} desc={s.desc} status={status} />
+              })}
+            </div>
+          </div>
+
+          {/* 安抚文字 */}
+          <div
+            style={{
+              fontSize: '12px',
+              color: TEXT_MUTED,
+              textAlign: 'center',
+              lineHeight: 1.7,
+            }}
+          >
+            首次复核通常 30–60 秒。完成后将自动跳转至结果页。
+            <br />
+            文件仅用于本次分析，不做存储或训练。
+          </div>
+
         </div>
       </div>
     )
   }
 
-  // ── UPLOAD VIEW ───────────────────────────────────────────────────
+  /* ───────────────────────────────────────────────────────────────
+   *  UPLOAD 视图 — 浅色专业风
+   * ──────────────────────────────────────────────────────────────*/
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#0f1117', color: '#f1f5f9', padding: '24px' }}>
-      <div style={{ maxWidth: '720px', margin: '0 auto' }}>
-        <Link href="/" style={{ color: '#94a3b8', textDecoration: 'none', fontSize: '14px' }}>← 返回首页</Link>
-        <h1 style={{ fontSize: '28px', fontWeight: 700, marginTop: '24px', marginBottom: '8px' }}>上传财务报告</h1>
-        <p style={{ color: '#94a3b8', marginBottom: '32px' }}>支持 PDF 格式，最大 50MB</p>
+    <div style={{ minHeight: '100vh', backgroundColor: '#f6f8fb', color: TEXT_PRIMARY }}>
+      <TopNav active="analyze" />
 
-        {/* Upload Zone */}
-        <div
-          onClick={() => fileInputRef.current?.click()}
-          onDrop={handleDrop}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-          onDragLeave={() => setDragOver(false)}
+      <div style={{ maxWidth: '760px', margin: '0 auto', padding: '32px 24px 64px' }}>
+        <Link
+          href="/"
+          style={{ color: TEXT_MUTED, textDecoration: 'none', fontSize: '13px' }}
+        >
+          ← 返回首页
+        </Link>
+        <h1
           style={{
-            border: `2px dashed ${dragOver ? '#3b82f6' : file ? '#22c55e' : '#2d3048'}`,
-            borderRadius: '12px', backgroundColor: '#1a1d27', padding: '48px',
-            textAlign: 'center', cursor: 'pointer', marginBottom: '8px', transition: 'border-color 0.2s',
+            fontSize: '26px',
+            fontWeight: 800,
+            marginTop: '18px',
+            marginBottom: '8px',
+            color: TEXT_PRIMARY,
+            letterSpacing: '-0.3px',
           }}
         >
-          <input ref={fileInputRef} type="file" accept=".pdf" style={{ display: 'none' }}
-            onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} />
-          {file ? (
-            <div>
-              <div style={{ fontSize: '32px', marginBottom: '8px' }}>✅</div>
-              <div style={{ fontWeight: 600, color: '#22c55e' }}>{file.name}</div>
-              <div style={{ color: '#94a3b8', fontSize: '14px', marginTop: '4px' }}>
-                {(file.size / 1024 / 1024).toFixed(2)} MB · 点击重新选择
+          上传财务报告，立即开始智能检查
+        </h1>
+        <p style={{ color: TEXT_SECONDARY, fontSize: '14px', marginBottom: '28px', lineHeight: 1.65 }}>
+          上传后，系统将自动解析报告内容，并进行数据一致性复核、披露完整性检查及财务风险识别。
+        </p>
+
+        {/* 上传卡片 */}
+        <div
+          style={{
+            backgroundColor: '#ffffff',
+            border: `1px solid ${BORDER}`,
+            borderRadius: '14px',
+            padding: '24px',
+            boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+            marginBottom: '20px',
+          }}
+        >
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            onDrop={handleDrop}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
+            style={{
+              border: `2px dashed ${dragOver ? BRAND_LIGHT : file ? '#22c55e' : BORDER}`,
+              borderRadius: '12px',
+              backgroundColor: dragOver
+                ? BRAND_TINT
+                : file
+                ? '#ecfdf5'
+                : '#f8fafc',
+              padding: '40px 24px',
+              textAlign: 'center',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf"
+              style={{ display: 'none' }}
+              onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+            />
+            {file ? (
+              <div>
+                <div style={{ fontSize: '32px', marginBottom: '6px' }}>✅</div>
+                <div style={{ fontWeight: 700, color: '#047857', fontSize: '15px' }}>{file.name}</div>
+                <div style={{ color: TEXT_MUTED, fontSize: '13px', marginTop: '4px' }}>
+                  {(file.size / 1024 / 1024).toFixed(2)} MB · 点击重新选择
+                </div>
               </div>
+            ) : (
+              <div>
+                <div style={{ fontSize: '36px', marginBottom: '8px' }}>📄</div>
+                <div style={{ fontWeight: 700, fontSize: '15px', color: TEXT_PRIMARY, marginBottom: '6px' }}>
+                  拖拽 PDF 至此，或点击选择文件
+                </div>
+                <div style={{ color: TEXT_MUTED, fontSize: '13px' }}>
+                  当前仅支持上传 PDF 格式财务报告，单个文件最大 50MB
+                </div>
+              </div>
+            )}
+          </div>
+
+          <p
+            style={{
+              color: TEXT_MUTED,
+              fontSize: '12px',
+              marginTop: '14px',
+              marginBottom: 0,
+              lineHeight: 1.6,
+            }}
+          >
+            建议上传已公开发布的财务报告。如需上传内部草稿，请先进行脱敏处理（删除公司名称、替换敏感数字）。
+          </p>
+        </div>
+
+        {/* 准则识别 — 自动识别为主，仅在用户选择展开时显示手动覆盖 */}
+        <div
+          style={{
+            backgroundColor: '#ffffff',
+            border: `1px solid ${BORDER}`,
+            borderRadius: '14px',
+            padding: '20px 24px',
+            marginBottom: '20px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+            <div
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '8px',
+                backgroundColor: BRAND_TINT,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                fontSize: '16px',
+              }}
+            >
+              🤖
             </div>
-          ) : (
-            <div>
-              <div style={{ fontSize: '40px', marginBottom: '12px' }}>📄</div>
-              <div style={{ fontWeight: 600, marginBottom: '8px' }}>拖拽 PDF 至此，或点击选择文件</div>
-              <div style={{ color: '#94a3b8', fontSize: '14px' }}>支持中英文财务报告 · 最大 50MB</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: TEXT_PRIMARY, marginBottom: '4px' }}>
+                系统将自动识别报告适用准则
+              </div>
+              <div style={{ fontSize: '13px', color: TEXT_SECONDARY, lineHeight: 1.6 }}>
+                平台会根据报告披露内容自动判断适用的会计准则（CAS / IFRS / HKFRS / US GAAP 等）。
+                如识别结果不准确，可由您手动覆盖。
+              </div>
+              <button
+                onClick={() => setShowStandard((v) => !v)}
+                style={{
+                  marginTop: '10px',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  color: BRAND_LIGHT,
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                {showStandard ? '收起手动设置 ▲' : '手动指定准则（可选）▾'}
+              </button>
+            </div>
+          </div>
+
+          {showStandard && (
+            <div
+              style={{
+                marginTop: '14px',
+                paddingTop: '14px',
+                borderTop: `1px solid ${BORDER}`,
+              }}
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                {standards.map((s) => {
+                  const selected = standard === s.value
+                  return (
+                    <div
+                      key={s.value}
+                      onClick={() => setStandard(selected ? '' : s.value)}
+                      style={{
+                        border: `1.5px solid ${selected ? BRAND_LIGHT : BORDER}`,
+                        borderRadius: '8px',
+                        backgroundColor: selected ? BRAND_TINT : '#ffffff',
+                        padding: '12px',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, fontSize: '13px', color: TEXT_PRIMARY, marginBottom: '4px' }}>
+                        {s.label}
+                      </div>
+                      <div style={{ color: TEXT_MUTED, fontSize: '11.5px', lineHeight: 1.45 }}>
+                        {s.desc}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              {standard && (
+                <div style={{ marginTop: '10px', fontSize: '12px', color: TEXT_MUTED }}>
+                  已手动指定：<strong style={{ color: TEXT_PRIMARY }}>{standard}</strong>。再次点击同一项可取消，恢复为自动识别。
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Disclaimer */}
-        <p style={{ color: '#4b5563', fontSize: '12px', marginBottom: '28px', lineHeight: 1.6 }}>
-          建议上传已公开发布的财务报告。如需上传内部草稿，请先进行脱敏处理（删除公司名称、替换敏感数字）。
-        </p>
-
-        {/* Standards Selector — only show after file selected */}
-        {file && (
-          <div style={{ marginBottom: '28px' }}>
-            <p style={{ color: '#94a3b8', fontSize: '14px', marginBottom: '12px' }}>选择报告准则</p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-              {standards.map((s) => (
-                <div key={s.value} onClick={() => setStandard(s.value)} style={{
-                  border: `2px solid ${standard === s.value ? '#3b82f6' : '#2d3048'}`,
-                  borderRadius: '10px', backgroundColor: standard === s.value ? 'rgba(59,130,246,0.1)' : '#1a1d27',
-                  padding: '14px', cursor: 'pointer', transition: 'all 0.2s',
-                }}>
-                  <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '4px' }}>{s.label}</div>
-                  <div style={{ color: '#94a3b8', fontSize: '11px', lineHeight: 1.4 }}>{s.desc}</div>
-                </div>
-              ))}
-            </div>
+        {/* 分析模式 */}
+        <div
+          style={{
+            backgroundColor: '#ffffff',
+            border: `1px solid ${BORDER}`,
+            borderRadius: '14px',
+            padding: '20px 24px',
+            marginBottom: '20px',
+          }}
+        >
+          <div style={{ fontSize: '14px', fontWeight: 700, color: TEXT_PRIMARY, marginBottom: '12px' }}>
+            选择分析模式
           </div>
-        )}
-
-        {/* Mode Selector */}
-        <div style={{ marginBottom: '32px' }}>
-          <p style={{ color: '#94a3b8', fontSize: '14px', marginBottom: '12px' }}>选择分析模式</p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-            {modes.map((m) => (
-              <div key={m.value} onClick={() => setMode(m.value)} style={{
-                border: `2px solid ${mode === m.value ? '#3b82f6' : '#2d3048'}`,
-                borderRadius: '10px', backgroundColor: mode === m.value ? 'rgba(59,130,246,0.1)' : '#1a1d27',
-                padding: '16px', cursor: 'pointer', position: 'relative', transition: 'all 0.2s',
-              }}>
-                {m.badge && (
-                  <span style={{ position: 'absolute', top: '8px', right: '8px', backgroundColor: '#3b82f6', color: 'white', fontSize: '11px', padding: '2px 6px', borderRadius: '4px' }}>{m.badge}</span>
-                )}
-                <div style={{ fontSize: '24px', marginBottom: '8px' }}>{m.icon}</div>
-                <div style={{ fontWeight: 600, marginBottom: '4px' }}>{m.label}</div>
-                <div style={{ color: '#94a3b8', fontSize: '12px' }}>{m.desc}</div>
-              </div>
-            ))}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+            {modes.map((m) => {
+              const selected = mode === m.value
+              return (
+                <div
+                  key={m.value}
+                  onClick={() => setMode(m.value)}
+                  style={{
+                    border: `1.5px solid ${selected ? BRAND_LIGHT : BORDER}`,
+                    borderRadius: '10px',
+                    backgroundColor: selected ? BRAND_TINT : '#ffffff',
+                    padding: '14px',
+                    cursor: 'pointer',
+                    position: 'relative',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {m.badge && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: '8px',
+                        right: '8px',
+                        backgroundColor: BRAND_LIGHT,
+                        color: 'white',
+                        fontSize: '10.5px',
+                        fontWeight: 600,
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                      }}
+                    >
+                      {m.badge}
+                    </span>
+                  )}
+                  <div style={{ fontSize: '22px', marginBottom: '6px' }}>{m.icon}</div>
+                  <div style={{ fontWeight: 700, color: TEXT_PRIMARY, fontSize: '14px', marginBottom: '4px' }}>
+                    {m.label}
+                  </div>
+                  <div style={{ color: TEXT_MUTED, fontSize: '11.5px', lineHeight: 1.5 }}>
+                    {m.desc}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
 
         {error && (
-          <div style={{ backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', borderRadius: '8px', padding: '12px', marginBottom: '16px', color: '#ef4444' }}>
-            {error}
+          <div
+            style={{
+              backgroundColor: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: '8px',
+              padding: '12px 14px',
+              marginBottom: '16px',
+              color: '#b91c1c',
+              fontSize: '13px',
+            }}
+          >
+            ⚠ {error}
           </div>
         )}
 
-        <button onClick={handleAnalyzeClick} disabled={!file} style={{
-          width: '100%', padding: '16px', backgroundColor: file ? '#3b82f6' : '#2d3048',
-          color: file ? 'white' : '#6b7280', border: 'none', borderRadius: '10px',
-          fontSize: '16px', fontWeight: 600, cursor: file ? 'pointer' : 'not-allowed', transition: 'background-color 0.2s',
-        }}>
-          开始分析
+        <button
+          onClick={handleAnalyzeClick}
+          disabled={!file}
+          style={{
+            width: '100%',
+            padding: '14px',
+            backgroundColor: file ? BRAND_LIGHT : '#cbd5e1',
+            color: file ? 'white' : '#64748b',
+            border: 'none',
+            borderRadius: '10px',
+            fontSize: '15px',
+            fontWeight: 700,
+            cursor: file ? 'pointer' : 'not-allowed',
+            transition: 'background-color 0.2s',
+            boxShadow: file ? '0 6px 18px rgba(37, 99, 235, 0.25)' : 'none',
+          }}
+        >
+          开始智能检查
         </button>
 
-        {/* Privacy notice */}
-        <p style={{ color: '#4b5563', fontSize: '12px', textAlign: 'center', marginTop: '12px' }}>
+        <p style={{ color: TEXT_MUTED, fontSize: '12px', textAlign: 'center', marginTop: '12px' }}>
           文件仅用于本次分析，不做存储或训练，分析完成后自动删除
         </p>
       </div>
 
-      {/* Confirmation Modal */}
+      {/* 上传确认 Modal */}
       {showModal && (
-        <div style={{
-          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,
-        }}>
-          <div style={{
-            backgroundColor: '#1a1d27', border: '1px solid #2d3048', borderRadius: '14px',
-            padding: '32px', maxWidth: '440px', width: '90%',
-          }}>
-            <div style={{ fontSize: '24px', marginBottom: '16px', textAlign: 'center' }}>🔒</div>
-            <h2 style={{ fontSize: '17px', fontWeight: 700, marginBottom: '16px', color: '#f1f5f9', textAlign: 'center' }}>
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              border: `1px solid ${BORDER}`,
+              borderRadius: '14px',
+              padding: '28px',
+              maxWidth: '440px',
+              width: '90%',
+            }}
+          >
+            <div
+              style={{
+                width: '48px',
+                height: '48px',
+                borderRadius: '12px',
+                backgroundColor: BRAND_TINT,
+                margin: '0 auto 14px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '24px',
+              }}
+            >
+              🔒
+            </div>
+            <h2 style={{ fontSize: '17px', fontWeight: 700, marginBottom: '12px', color: TEXT_PRIMARY, textAlign: 'center' }}>
               上传确认
             </h2>
-            <p style={{ color: '#94a3b8', fontSize: '14px', lineHeight: 1.7, marginBottom: '28px' }}>
+            <p style={{ color: TEXT_SECONDARY, fontSize: '13.5px', lineHeight: 1.7, marginBottom: '24px' }}>
               请确认您有权上传此文件，且已了解本平台仅用于分析本次内容，不做任何存储、传输或模型训练用途。
             </p>
-            <div style={{ display: 'flex', gap: '12px' }}>
+            <div style={{ display: 'flex', gap: '10px' }}>
               <button
                 onClick={() => setShowModal(false)}
                 style={{
-                  flex: 1, padding: '12px', backgroundColor: 'transparent',
-                  border: '1px solid #2d3048', color: '#94a3b8', borderRadius: '8px',
-                  cursor: 'pointer', fontSize: '14px', fontWeight: 600,
+                  flex: 1,
+                  padding: '11px',
+                  backgroundColor: '#ffffff',
+                  border: `1px solid ${BORDER}`,
+                  color: TEXT_SECONDARY,
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: 600,
                 }}
               >
                 取消
@@ -302,12 +684,18 @@ export default function AnalyzePage() {
               <button
                 onClick={handleConfirm}
                 style={{
-                  flex: 2, padding: '12px', backgroundColor: '#3b82f6',
-                  border: 'none', color: 'white', borderRadius: '8px',
-                  cursor: 'pointer', fontSize: '14px', fontWeight: 600,
+                  flex: 2,
+                  padding: '11px',
+                  backgroundColor: BRAND_LIGHT,
+                  border: 'none',
+                  color: 'white',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: 700,
                 }}
               >
-                确认，开始分析
+                确认，开始检查
               </button>
             </div>
           </div>
@@ -317,97 +705,193 @@ export default function AnalyzePage() {
   )
 }
 
-// ── Markdown Renderer ─────────────────────────────────────────────────────────
-function MarkdownRenderer({ text, streaming }: { text: string; streaming: boolean }) {
-  const lines = text.split('\n')
-  const elements: React.ReactNode[] = []
+/* ───────────────────────────────────────────────────────────────
+ *  顶部导航（复用）
+ * ──────────────────────────────────────────────────────────────*/
 
-  lines.forEach((line, i) => {
-    if (line.startsWith('# ')) {
-      elements.push(
-        <h1 key={i} style={{ fontSize: '20px', fontWeight: 800, color: '#e2e8f0', marginTop: '32px', marginBottom: '12px', paddingBottom: '8px', borderBottom: '1px solid #2d3048' }}>
-          {line.slice(2)}
-        </h1>
-      )
-    } else if (line.startsWith('## ')) {
-      elements.push(
-        <h2 key={i} style={{ fontSize: '16px', fontWeight: 700, color: '#93c5fd', marginTop: '28px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ display: 'inline-block', width: '3px', height: '16px', backgroundColor: '#3b82f6', borderRadius: '2px', flexShrink: 0 }} />
-          {line.slice(3)}
-        </h2>
-      )
-    } else if (line.startsWith('### ')) {
-      elements.push(
-        <h3 key={i} style={{ fontSize: '13px', fontWeight: 700, color: '#94a3b8', marginTop: '16px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          {line.slice(4)}
-        </h3>
-      )
-    } else if (line.match(/^-{3,}$/) || line.match(/^={3,}$/)) {
-      elements.push(<hr key={i} style={{ border: 'none', borderTop: '1px solid #2d3048', margin: '16px 0' }} />)
-    } else if (line.includes('🔴')) {
-      elements.push(<RiskLine key={i} line={line} color="#fca5a5" bg="rgba(239,68,68,0.08)" border="rgba(239,68,68,0.3)" />)
-    } else if (line.includes('🟡')) {
-      elements.push(<RiskLine key={i} line={line} color="#fcd34d" bg="rgba(245,158,11,0.08)" border="rgba(245,158,11,0.3)" />)
-    } else if (line.includes('✅')) {
-      elements.push(<RiskLine key={i} line={line} color="#86efac" bg="rgba(34,197,94,0.07)" border="rgba(34,197,94,0.25)" />)
-    } else if (line.includes('⚪')) {
-      elements.push(<RiskLine key={i} line={line} color="#94a3b8" bg="rgba(148,163,184,0.06)" border="rgba(148,163,184,0.2)" />)
-    } else if (line.match(/^[-*•]\s/)) {
-      elements.push(
-        <div key={i} style={{ display: 'flex', gap: '8px', padding: '2px 0', color: '#cbd5e1', fontSize: '14px', lineHeight: 1.7 }}>
-          <span style={{ color: '#3b82f6', flexShrink: 0, marginTop: '1px' }}>›</span>
-          <span>{renderInline(line.slice(2))}</span>
+function TopNav({ active }: { active?: 'home' | 'analyze' }) {
+  return (
+    <nav
+      style={{
+        backgroundColor: NAV_BG,
+        color: NAV_TEXT,
+        padding: '14px 32px',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+      }}
+    >
+      <Link href="/" style={{ textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div
+          style={{
+            width: '26px',
+            height: '26px',
+            borderRadius: '6px',
+            background: `linear-gradient(135deg, ${BRAND_LIGHT}, ${BRAND})`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'white',
+            fontWeight: 800,
+            fontSize: '12px',
+          }}
+        >
+          FG
         </div>
-      )
-    } else if (line.trim() === '') {
-      elements.push(<div key={i} style={{ height: '6px' }} />)
-    } else {
-      elements.push(
-        <p key={i} style={{ color: '#cbd5e1', fontSize: '14px', lineHeight: 1.75, margin: '2px 0' }}>
-          {renderInline(line)}
-        </p>
-      )
-    }
-  })
+        <div style={{ fontWeight: 700, fontSize: '16px' }}>
+          <span style={{ color: '#93c5fd' }}>Fin</span>
+          <span style={{ color: '#ffffff' }}>Guard</span>
+          <span style={{ marginLeft: '8px', fontSize: '12px', fontWeight: 500, color: '#94a3b8' }}>
+            AI 财务报告审阅平台
+          </span>
+        </div>
+      </Link>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '13px' }}>
+        <Link
+          href="/"
+          style={{
+            color: active === 'home' ? '#ffffff' : '#94a3b8',
+            textDecoration: 'none',
+          }}
+        >
+          产品介绍
+        </Link>
+        <Link
+          href="/analyze"
+          style={{
+            color: active === 'analyze' ? '#ffffff' : '#94a3b8',
+            textDecoration: 'none',
+          }}
+        >
+          工作台
+        </Link>
+      </div>
+    </nav>
+  )
+}
 
+/* ───────────────────────────────────────────────────────────────
+ *  解析过程子组件：当前任务卡 + 阶段行
+ * ──────────────────────────────────────────────────────────────*/
+
+function CurrentTaskCard({ stageKey }: { stageKey: StageKey }) {
+  const stage = STAGES.find((s) => s.key === stageKey)!
   return (
-    <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-      {elements}
-      {streaming && (
-        <span style={{ display: 'inline-block', width: '2px', height: '15px', backgroundColor: '#3b82f6', marginLeft: '2px', verticalAlign: 'middle', animation: 'blink 1s infinite' }} />
-      )}
+    <div
+      style={{
+        backgroundColor: BRAND_TINT,
+        border: `1px solid ${BRAND_LIGHT}33`,
+        borderRadius: '10px',
+        padding: '16px 18px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '14px',
+        position: 'relative',
+        overflow: 'hidden',
+        animation: 'fg-fade-in 0.25s ease-out',
+      }}
+      key={stageKey}
+    >
+      {/* 扫描动画线 */}
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background: `linear-gradient(180deg, transparent, ${BRAND_LIGHT}1a, transparent)`,
+          animation: 'fg-scan 2s ease-in-out infinite',
+          pointerEvents: 'none',
+        }}
+      />
+      <div
+        style={{
+          width: '42px',
+          height: '42px',
+          borderRadius: '10px',
+          backgroundColor: '#ffffff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          position: 'relative',
+        }}
+      >
+        <Spinner />
+      </div>
+      <div style={{ flex: 1, position: 'relative', zIndex: 1 }}>
+        <div style={{ fontSize: '14px', fontWeight: 700, color: BRAND_STRONG, marginBottom: '2px' }}>
+          {stage.label}
+        </div>
+        <div style={{ fontSize: '12.5px', color: TEXT_SECONDARY, lineHeight: 1.5 }}>{stage.desc}</div>
+      </div>
     </div>
   )
 }
 
-function RiskLine({ line, color, bg, border }: { line: string; color: string; bg: string; border: string }) {
+function StageRow({
+  idx,
+  label,
+  desc,
+  status,
+}: {
+  idx: number
+  label: string
+  desc: string
+  status: 'done' | 'active' | 'pending'
+}) {
+  const bg = status === 'done' ? '#ecfdf5' : status === 'active' ? BRAND_TINT : '#f8fafc'
+  const borderColor = status === 'done' ? '#a7f3d0' : status === 'active' ? '#bfdbfe' : BORDER
+  const dotBg = status === 'done' ? '#10b981' : status === 'active' ? BRAND_LIGHT : '#cbd5e1'
+  const labelColor = status === 'pending' ? TEXT_MUTED : TEXT_PRIMARY
   return (
-    <div style={{ backgroundColor: bg, border: `1px solid ${border}`, borderRadius: '6px', padding: '9px 13px', margin: '5px 0', fontSize: '13px', lineHeight: 1.7, color }}>
-      {renderInline(line)}
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+        padding: '10px 14px',
+        backgroundColor: bg,
+        border: `1px solid ${borderColor}`,
+        borderRadius: '8px',
+      }}
+    >
+      <div
+        style={{
+          width: '24px',
+          height: '24px',
+          borderRadius: '50%',
+          backgroundColor: dotBg,
+          color: 'white',
+          fontSize: '12px',
+          fontWeight: 700,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+        }}
+      >
+        {status === 'done' ? '✓' : idx}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: '13px', fontWeight: 600, color: labelColor }}>{label}</div>
+        <div style={{ fontSize: '11.5px', color: TEXT_MUTED, marginTop: '1px' }}>{desc}</div>
+      </div>
+      {status === 'active' && <Spinner size={14} />}
     </div>
   )
 }
 
-function renderInline(text: string): React.ReactNode {
-  const parts = text.split(/(\*\*[^*]+\*\*)/)
-  if (parts.length === 1) return text
+function Spinner({ size = 18 }: { size?: number }) {
   return (
-    <>
-      {parts.map((p, i) =>
-        p.startsWith('**') && p.endsWith('**')
-          ? <strong key={i} style={{ fontWeight: 700 }}>{p.slice(2, -2)}</strong>
-          : <span key={i}>{p}</span>
-      )}
-    </>
+    <svg width={size} height={size} viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite' }}>
+      <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
+      <circle cx="12" cy="12" r="9" stroke={BRAND_LIGHT} strokeWidth="2.5" fill="none" strokeOpacity="0.25" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke={BRAND_LIGHT} strokeWidth="2.5" fill="none" strokeLinecap="round" />
+    </svg>
   )
 }
 
-function LoadingDots() {
-  return (
-    <span style={{ display: 'inline-flex', gap: '4px' }}>
-      {[0, 1, 2].map(i => (
-        <span key={i} style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', animation: `pulse 1.2s ${i * 0.2}s infinite` }} />
-      ))}
-    </span>
-  )
+const BRAND_STRONG = '#1e3a8a'
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms))
 }

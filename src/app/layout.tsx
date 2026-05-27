@@ -5,14 +5,18 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'FinGuard | 专业财务报告自查与风险识别平台',
-  description: '帮助企业财务团队在发布前自查，识别数字错误、披露缺陷与风险信号',
+  title: 'FinGuard | AI 财务报告审阅与风险提示平台',
+  description:
+    '上传财务报告后，系统自动进行数据一致性复核、披露完整性检查及财务风险识别，辅助企业提升报告编制质量。',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh">
-      <body className={inter.className} style={{ backgroundColor: '#0f1117', color: '#f1f5f9', minHeight: '100vh' }}>
+      <body
+        className={inter.className}
+        style={{ backgroundColor: '#f6f8fb', color: '#0f172a', minHeight: '100vh' }}
+      >
         {children}
       </body>
     </html>

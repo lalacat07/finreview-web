@@ -2,12 +2,81 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* 浅色专业 SaaS 主题 */
+  --bg-page: #f6f8fb;
+  --bg-card: #ffffff;
+  --bg-subtle: #f1f5f9;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-faint: #94a3b8;
+
+  /* 顶部深色导航 */
+  --bg-nav: #0b1220;
+  --bg-nav-text: #e2e8f0;
+
+  /* 品牌色（深蓝） */
+  --brand: #1e40af;
+  --brand-strong: #1e3a8a;
+  --brand-light: #2563eb;
+  --brand-tint: #eff6ff;
+  --brand-ring: rgba(37, 99, 235, 0.16);
+
+  /* 风险色 */
+  --risk-high-bg: #fef2f2;
+  --risk-high-border: #fecaca;
+  --risk-high-text: #b91c1c;
+  --risk-med-bg: #fffbeb;
+  --risk-med-border: #fde68a;
+  --risk-med-text: #b45309;
+  --risk-low-bg: #f8fafc;
+  --risk-low-border: #e2e8f0;
+  --risk-low-text: #475569;
+  --risk-ok-bg: #ecfdf5;
+  --risk-ok-border: #a7f3d0;
+  --risk-ok-text: #047857;
+}
+
 body {
-  background-color: #0f1117;
-  color: #f1f5f9;
+  background-color: var(--bg-page);
+  color: var(--text-primary);
 }
 
 @media print {
-  .no-print { display: none !important; }
-  body { background: white !important; color: black !important; }
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}
+
+/* 通用动画 */
+@keyframes fg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@keyframes fg-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+@keyframes fg-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+@keyframes fg-progress {
+  0% { transform: translateX(-30%); }
+  100% { transform: translateX(130%); }
+}
+@keyframes fg-scan {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+@keyframes fg-fade-in {
+  0% { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
