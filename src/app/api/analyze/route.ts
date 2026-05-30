@@ -50,15 +50,42 @@ const DATA_REVIEW_PROMPT = `${SYSTEM_ROLE}
 - 是否为草稿（如出现 DRAFT 水印、[date]、空白栏位等）
 
 【数据层】算术核验与跨表勾稽
-- 实体名称与报表名称一致性（IFRS 下不应使用"Balance Sheet"）
-- 占位符检查：[date]、DRAFT 水印、空白栏位
-- 利润表：毛利→营业利润→税前利润→净利润各环节逐行验算；归属母公司/少数股东拆分之和等于合计
+- 实体名称与报表名称一致性（IFRS 下不应使用"Balance Sheet"/"Income Statement"；注意"Cash Flows"复数）
+- 占位符检查：[date]、[审计报告编号]、【OS】、DRAFT 水印、董事签署栏空白
+- 利润表：毛利→营业利润→税前利润→净利润→综合收益各环节逐行验算；归属母公司/少数股东(NCI)拆分之和等于合计；所得税符号方向（benefit 用正数、expense 用括号，须与税项附注方向一致）
 - 资产负债表：流动/非流动资产合计、总资产、流动/非流动负债合计、负债合计、权益合计；资产=负债+权益
 - 股东权益变动表：每列期初+本期变动=期末；期末余额与资产负债表权益行勾稽
-- 所有附注表格：纵向（列合计）与横向（期初+变动=期末）双维度核验；最小差异须追溯
-- EPS 重算：归属于普通股股东净利润 / 加权平均股数；Basic 与 Diluted 分别重算
-- 现金流量表：期末余额=资产负债表现金；三类活动+汇率影响=净变动；间接法起点=利润表净利润
-- 跨表勾稽：净利润 ↔ 现金流量表起点 ↔ 权益变动表；NCI 金额三处一致
+- 所有附注表格：纵向（列合计）与横向（期初+变动=期末）双维度核验；含 Cost/累计折旧/账面净值三层结构者额外验算"账面净值=成本−累计折旧"；最小差异须追溯，不得用"可能为四舍五入"关闭（除非已独立重算证明）
+- EPS 重算：归属于普通股股东净利润 / 加权平均股数；Basic 与 Diluted 分别重算并与利润表比对
+- 现金流量表：期末余额=资产负债表现金(+受限现金)；三类活动+汇率影响=净变动；本期期初=上期期末
+
+【数据层·现金流量表逐行深度勾稽】
+- 间接法非现金调节项逐行勾稽：折旧/摊销=对应资产附注"本期计提"合计；减值=对应附注当期减值；股份支付=SBC附注；利息费用/收入=财务费用附注（须与筹资活动支付利息呼应）
+- 营运资本变动三步法：① BS Delta=期末−期初；② 剔除并购取得部分(并购附注)、汇率影响(对应附注汇兑行)、已单列的减值/ECL、非流动部分及与长期资产采购相关的应付款；③ 理论值 vs CFS 列示值，差异须能解释或为零
+- 投资活动逐行：购置PPE=PPE附注"购买新增"(剔除并购取得，并调整应付未付购置款及PPE相关预付款变动)；并购净现金=各次并购现金支付−并购取得现金，与并购附注一致
+- 筹资活动逐行：发行股份=SOCE对应列且与股本附注股数×发行价双重验证；借款新增/偿还=借款附注；租赁本金/利息=融资对账表与租赁附注；关联方借款=融资对账表＋关联方往来余额变动（剔除非融资性往来）
+- 融资活动对账表通常仅覆盖负债性融资项目，不含权益性筹资（回购、少数股东注资）；CFS筹资净额与对账表差异若=权益性项目，属正常口径差异
+
+【数据层·新增核验维度】
+- 线条规范（IFRS/HKFRS）：单实线下方须为上方明细之准确小计；双实线上方须为最终合计且表格终止；虚实线下方为跨项目引用汇总；双向核验（从线条推数字 + 从加总关系查线条是否误用/缺失）。US GAAP 无强制线条，以加粗与缩进层级判断，逻辑相同
+- 正负号含义一致性：Increase/(decrease)、(Increase)/decrease、gain/(loss) 等行项目，正负方向须全文统一；重点查现金流量表营运资本变动行、SOCE 变动行、附注变动分析表；行项目名称未说明正负含义→低风险，建议补充
+- Note 序号连续性：序号连续无跳号无重复、子项(a)(b)(c)连续；扫描"幽灵索引"——主表引用 Note X 但全文不存在 Note X
+- 简称定义一致性：每个简称首次出现须有定义(全称("简称"))，定义后全文一致使用，不得同一概念两套简称；重点 the Company/the Group、IFRS/HKFRS、ECL/CGU/ROU/NCI/OCI、货币简称
+
+【数据层·高频专项陷阱】
+- IFRS7 流动性到期表：横向各期限列加总=Total 列；纵向各负债类型=各列合计；关键——含未来利息的负债其"合同未折现额"必然 ≥ 账面值，若某行 Total ≤ carrying amount，极可能误将账面值填入合同额列
+- 公允价值层级：使用重大不可观察输入(DCF、预期现金流、私有股权估值、近期交易价)应归 Level 3，列为 Level 2 须警示；核查"描述详尽但金额为 nil"的层级错位
+- EPS 加权平均股数：当期有回购/注销时，据加权股数倒算隐含完成日期，与附注叙述核对；优先股利润分配额须能独立勾稽且前后两期口径一致，一期可勾稽另一期不能即为口径变化信号
+- Mezzanine accretion（US GAAP）：P&L Accretion 行 = SOCE Accretion 行 = CFS 非现金披露 = 优先股活动表加总，四处一致
+- 母公司/单体简表不豁免：Condensed P&L/BS/CFS 本身须执行逐环加总，最基础的"综合收益=净利润+其他综合收益"也不得跳过
+
+【数据层·IPO 上市文件跨章节一致性（仅当文本含 MD&A/OFR/业务/风险因素/资本化表等章节时执行；否则注明本项不适用）】
+- 财报数字 vs MD&A/OFR：收入(分产品/地区)、毛利率(按披露金额重算)、费用口径、调整后EBITDA/Non-GAAP(调整项须有来源、无重复、口径跨期一致)、流动性章节(现金/借款/受限资金/未用授信)
+- 财务数据 vs 业务运营数据：门店数/客户数/GMV/付费用户/ARPU 等与收入趋势是否自洽；运营改善但收入或现金流恶化须列入待确认
+- 股本/资本化表/EPS/SOCE 股数一致；债务契约 covenant/waiver/refinancing 在借款附注/后续事项/风险因素/MD&A 一致；关联交易金额余额与各章节一致
+- 后续事项三层日期：报告期至审计报告日 / 审计报告日至申报日 / 申报日后已知重大事项，三层披露一致
+
+【AI 执行边界】凡无法仅凭报告文本直接定性的差异（需底稿、合同、管理层解释才能判断原因者），不得臆测原因关闭，须归入"待管理层确认事项"。
 
 【语言层】语言合规性
 - 中英文语系一致性（英式 vs 美式拼写、日期格式、标点）
@@ -77,9 +104,9 @@ const DATA_REVIEW_PROMPT = `${SYSTEM_ROLE}
 | 报告名称 | [识别出的报告全称] |
 | 报告类型 | [年度报告 / 半年度报告 / ...] |
 | 报告期间 | [如 2024 年度] |
-| 适用准则 | [企业会计准则 / IFRS / ...，若为系统推断需注明"（系统推断）"] |
-| 审计机构 | [XX 会计师事务所，未披露填"未披露"] |
-| 签字注册会计师 | [XXX、XXX；未披露填"未披露"] |
+| 适用准则 | [按报告实际采用填写单一准则，如 企业会计准则 或 IFRS 或 HKFRS，不要并列多个；若为系统推断需注明"（系统推断）"] |
+| 审计机构 | [XX 会计师事务所/核数师，未披露填"未披露"] |
+| 签字会计师/项目合伙人 | [按报告实际披露填写：A 股/境内准则通常列两名签字注册会计师；港股/IFRS/HKFRS 通常以事务所名义出具并披露单一项目合伙人(engagement partner)，按报告原文如实填写，不要套用境内"两名签字注册会计师"格式；未披露填"未披露"] |
 | 报告状态 | [正式版 / 草稿（含 DRAFT 水印）/ 未明确] |
 
 ### 整体结论
@@ -88,7 +115,7 @@ const DATA_REVIEW_PROMPT = `${SYSTEM_ROLE}
 ## 财务数据复核
 
 ### 检查范围概述
-（一段话，约 80–150 字，说明本次已对整份报告进行了哪些维度的全量复核——主要财务报表、附注数据、关键财务指标计算、前后文披露口径一致性等。明确除下列需关注事项外，其他检查项目暂未发现明显异常。）
+（一段话，约 80–150 字，说明本次已对解析到的报告内容进行了哪些维度的复核——主要财务报表、附注数据、关键财务指标计算、前后文披露口径一致性等。措辞限定为"已解析到的内容"，不得声称"整份报告全量复核"。明确除下列需关注事项外，已复核项目暂未发现明显异常。）
 
 ### 检查成果摘要
 发现问题：[N] 项（高风险 [X] 项，中风险 [Y] 项，低风险 [Z] 项）
@@ -96,25 +123,32 @@ const DATA_REVIEW_PROMPT = `${SYSTEM_ROLE}
 
 ### 需关注事项
 
-（按风险等级从高到低排列。如未发现任何问题，则在本节输出：
+（问题分两类，先列「明显问题（直接处理）」、再列「待管理层确认事项」；各类内部按风险等级从高到低排列。如未发现任何问题，则在本节输出：
 "✅ 本次复核未发现明显的数据勾稽异常或披露不一致问题。已逐项核验：利润表各层级加总关系、资产负债表平衡等式、现金流量表三类活动汇总与期末余额、跨表勾稽一致性、附注与主表口径等。"
 
-否则每个问题严格使用如下卡片格式：）
+否则每个问题严格使用如下卡片格式（字段顺序固定，逐项填写，不得省略任一字段）：）
 
 #### 问题 1：[问题简短标题]
+- 问题类别：明显问题（直接处理） / 待管理层确认事项
+- 审计层次：第 X 层 [对应复核层次名称，如「加总精度」「跨表勾稽」「现金流量表勾稽」「深层逻辑矛盾」「上市文件跨章节」等]
 - 风险等级：🔴 高风险 / 🟡 中风险 / ⚪ 低风险
 - 涉及位置：[页码 / 报表名称 / 附注编号]
 - 问题描述：[客观描述，附原始数字]
+- 证据链：来源位置=[页/表/注]；独立计算公式=[列出参与计算的科目与算式]；AI 重算数=[金额]；报告列示数=[金额]；差异金额=[金额]；差异方向=[偏高/偏低]；四舍五入判断=[是否可由四舍五入解释，并说明理由——禁止无依据地以"可能为四舍五入"草草带过]
 - 可能影响：[审慎说明可能造成的披露/复核/合规影响]
 - 修改建议：[具体可操作的建议]
 
 #### 问题 2：...
 （以此类推）
 
+类别判定标准：
+- 明显问题（直接处理）：可由报告内文本与数字独立重算/勾稽即可确认的差错（如加总不符、跨表数据不一致、序号/页码错误、格式线条违规等）。
+- 待管理层确认事项：无法仅凭报告文本定性、需结合底稿或管理层口径方能判定的差异（如口径差异、估计判断、需外部信息佐证者）。严禁臆测，统一归入本类并说明需确认的具体事项。
+
 ## 语法核查
 
 ### 检查范围概述
-（一段话，约 60–100 字，说明已对整份报告的中英文正文及附注进行了哪些语言合规性检查——中英文语系一致性、日期格式与标点、专业术语规范性、主谓一致性、法定声明完整性等。明确除下列需关注事项外，其他语言检查项目暂未发现明显问题。）
+（一段话，约 60–100 字，说明已对解析到的中英文正文及附注进行了哪些语言合规性检查——中英文语系一致性、日期格式与标点、专业术语规范性、主谓一致性、法定声明完整性等。明确除下列需关注事项外，其他语言检查项目暂未发现明显问题。）
 
 ### 需关注事项
 
@@ -212,28 +246,125 @@ const FINANCIAL_ANALYSIS_PROMPT = `${SYSTEM_ROLE}
  * Route handler
  * ────────────────────────────────────────────────────────────────────────────*/
 
+/* 单次调用的字符预算：按模型上下文保守取值。
+ * deepseek-chat 上下文较大，可放宽；doubao-32k 较小，取较保守值。 */
+const CHAR_BUDGET = process.env.DEEPSEEK_API_KEY ? 90000 : 28000
+
+/** 将长文本按段落边界切分为不超过 budget 的块 */
+function chunkText(text: string, budget: number): string[] {
+  if (text.length <= budget) return [text]
+  const chunks: string[] = []
+  const paras = text.split(/\n{2,}/)
+  let buf = ''
+  for (const p of paras) {
+    if (buf.length + p.length + 2 > budget && buf) {
+      chunks.push(buf)
+      buf = ''
+    }
+    // 单段本身超长时硬切
+    if (p.length > budget) {
+      if (buf) {
+        chunks.push(buf)
+        buf = ''
+      }
+      for (let i = 0; i < p.length; i += budget) chunks.push(p.slice(i, i + budget))
+      continue
+    }
+    buf += (buf ? '\n\n' : '') + p
+  }
+  if (buf) chunks.push(buf)
+  return chunks
+}
+
+/** 非流式获取一次完整 completion 文本 */
+async function complete(systemPrompt: string, userMessage: string): Promise<string> {
+  const res = await client.chat.completions.create({
+    model: MODEL,
+    max_tokens: 8192,
+    stream: false,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userMessage },
+    ],
+  })
+  return res.choices[0]?.message?.content || ''
+}
+
+/** 从一段复核 markdown 中提取 ## 财务数据复核 下的 #### 问题卡片块 */
+function extractIssueCards(md: string, section: string): string[] {
+  const re = new RegExp(`##\\s+${section}([\\s\\S]*?)(?=\\n##\\s|$)`)
+  const m = md.match(re)
+  if (!m) return []
+  const body = m[1]
+  return body.split(/(?=^####\s)/m).filter((b) => /^####\s/.test(b.trim()))
+}
+
+/** 重新编号问题卡片标题（#### 问题 N：xxx / #### 语法问题 N：xxx） */
+function renumberCards(cards: string[], prefix: string): string {
+  return cards
+    .map((c, i) =>
+      c.replace(/^####\s+.*?(?=[:：])/m, `#### ${prefix} ${i + 1}`).trim()
+    )
+    .join('\n\n')
+}
+
+/** 多块复核结果合并为单一 markdown（总览/语法概述取首块，问题卡片全量合并） */
+function mergeReview(parts: string[]): string {
+  if (parts.length === 1) return parts[0]
+  const first = parts[0]
+  // 收集所有块的问题卡片
+  const dataCards: string[] = []
+  const grammarCards: string[] = []
+  parts.forEach((p) => {
+    dataCards.push(...extractIssueCards(p, '财务数据复核'))
+    grammarCards.push(...extractIssueCards(p, '语法核查'))
+  })
+
+  // 以首块为骨架，替换两个"需关注事项"区的卡片内容
+  const overviewMatch = first.match(/(##\s+报告总览[\s\S]*?)(?=\n##\s)/)
+  const overview = overviewMatch ? overviewMatch[1].trim() : ''
+
+  const dataScopeMatch = first.match(/##\s+财务数据复核([\s\S]*?)###\s+需关注事项/)
+  const dataHead = dataScopeMatch ? `## 财务数据复核${dataScopeMatch[1]}### 需关注事项` : '## 财务数据复核\n\n### 需关注事项'
+
+  const grammarScopeMatch = first.match(/##\s+语法核查([\s\S]*?)###\s+需关注事项/)
+  const grammarHead = grammarScopeMatch ? `## 语法核查${grammarScopeMatch[1]}### 需关注事项` : '## 语法核查\n\n### 需关注事项'
+
+  const dataBody = dataCards.length
+    ? '\n\n' + renumberCards(dataCards, '问题')
+    : '\n\n✅ 本次复核未发现明显的数据勾稽异常或披露不一致问题。'
+  const grammarBody = grammarCards.length
+    ? '\n\n' + renumberCards(grammarCards, '语法问题')
+    : '\n\n✅ 语言合规性检查未发现明显问题。'
+
+  return [overview, dataHead + dataBody, grammarHead + grammarBody].filter(Boolean).join('\n\n')
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { text, mode, standard } = await request.json()
     if (!text) return new Response('缺少报告文本', { status: 400 })
 
-    // standard 现在只是一个"用户手动覆盖"的可选提示
     const standardNote = standard
       ? `用户指定的会计准则（如系统识别不同，请以本字段为准并在报告总览中注明）：${standard}\n\n`
       : '系统将自动识别报告适用准则。\n\n'
 
-    let systemPrompt = ''
-    let userMessage = ''
+    const chunks = chunkText(text, CHAR_BUDGET)
+    const encoder = new TextEncoder()
 
-    if (mode === 'review') {
-      systemPrompt = DATA_REVIEW_PROMPT
-      userMessage = `${standardNote}请对以下财务报告文本执行【报告总览 + 财务数据复核 + 语法核查】：\n\n${text}`
-    } else if (mode === 'analysis') {
-      systemPrompt = FINANCIAL_ANALYSIS_PROMPT
-      userMessage = `${standardNote}请对以下财务报告文本执行【财务健康度分析】：\n\n${text}`
-    } else {
-      systemPrompt = `${DATA_REVIEW_PROMPT}\n\n---\n\n${FINANCIAL_ANALYSIS_PROMPT}`
-      userMessage = `${standardNote}请对以下财务报告文本同时输出以下四大模块（顺序严格）：
+    /* ── 单块：保留原流式体验 ── */
+    if (chunks.length === 1) {
+      let systemPrompt = ''
+      let userMessage = ''
+      if (mode === 'review') {
+        systemPrompt = DATA_REVIEW_PROMPT
+        userMessage = `${standardNote}请对以下财务报告文本执行【报告总览 + 财务数据复核 + 语法核查】：\n\n${text}`
+      } else if (mode === 'analysis') {
+        systemPrompt = FINANCIAL_ANALYSIS_PROMPT
+        userMessage = `${standardNote}请对以下财务报告文本执行【财务健康度分析】：\n\n${text}`
+      } else {
+        systemPrompt = `${DATA_REVIEW_PROMPT}\n\n---\n\n${FINANCIAL_ANALYSIS_PROMPT}`
+        userMessage = `${standardNote}请对以下财务报告文本同时输出以下四大模块（顺序严格）：
 1. ## 报告总览
 2. ## 财务数据复核
 3. ## 语法核查
@@ -242,26 +373,73 @@ export async function POST(request: NextRequest) {
 财务报告文本：
 
 ${text}`
+      }
+
+      const stream = await client.chat.completions.create({
+        model: MODEL,
+        max_tokens: 8192,
+        stream: true,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
+      })
+      const readable = new ReadableStream({
+        async start(controller) {
+          for await (const chunk of stream) {
+            const t = chunk.choices[0]?.delta?.content
+            if (t) controller.enqueue(encoder.encode(t))
+          }
+          controller.close()
+        },
+      })
+      return new Response(readable, {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      })
     }
 
-    const stream = await client.chat.completions.create({
-      model: MODEL,
-      max_tokens: 8192,
-      stream: true,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
-    })
-
-    const encoder = new TextEncoder()
+    /* ── 多块：分块分析 + 服务端合并，完成后整体下发 ── */
     const readable = new ReadableStream({
       async start(controller) {
-        for await (const chunk of stream) {
-          const text = chunk.choices[0]?.delta?.content
-          if (text) controller.enqueue(encoder.encode(text))
+        try {
+          const want = (m: string) => mode === 'both' || mode === m
+
+          // 复核（含总览/语法）：逐块运行
+          let reviewMd = ''
+          if (want('review')) {
+            const parts: string[] = []
+            for (let i = 0; i < chunks.length; i++) {
+              const note =
+                chunks.length > 1
+                  ? `（注意：这是同一份报告的第 ${i + 1}/${chunks.length} 部分。请仅就本部分内容执行复核，并照常输出"## 报告总览 / ## 财务数据复核 / ## 语法核查"结构；总览字段如本部分无法判断填"未披露"。）\n\n`
+                  : ''
+              parts.push(
+                await complete(
+                  DATA_REVIEW_PROMPT,
+                  `${standardNote}${note}请对以下财务报告文本（部分）执行【报告总览 + 财务数据复核 + 语法核查】：\n\n${chunks[i]}`
+                )
+              )
+            }
+            reviewMd = mergeReview(parts)
+          }
+
+          // 健康度：在首块（通常含主要报表）上运行一次
+          let healthMd = ''
+          if (want('analysis')) {
+            healthMd = await complete(
+              FINANCIAL_ANALYSIS_PROMPT,
+              `${standardNote}（注意：报告较长，以下为其主要财务报表所在的前置部分，请基于可见数据进行健康度分析，数据不足处标注 N/A。）\n\n请对以下财务报告文本执行【财务健康度分析】：\n\n${chunks[0]}`
+            )
+          }
+
+          const finalMd = [reviewMd, healthMd].filter(Boolean).join('\n\n')
+          controller.enqueue(encoder.encode(finalMd))
+          controller.close()
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          controller.enqueue(encoder.encode(`分析失败：${msg}`))
+          controller.close()
         }
-        controller.close()
       },
     })
 

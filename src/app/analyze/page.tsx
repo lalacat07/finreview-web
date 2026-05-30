@@ -105,7 +105,16 @@ export default function AnalyzePage() {
         const body = await extractRes.json().catch(() => ({}))
         throw new Error(body.error || 'PDF 解析失败')
       }
-      const { text } = await extractRes.json()
+      const { text, pageCount, charCount, truncated } = await extractRes.json()
+
+      // 并行启动确定性指标重算（取数→后端确定性计算），不阻塞主流式分析
+      const figuresPromise = fetch('/api/figures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
 
       // 阶段 2：识别结构（短暂展示）
       setCurrentStage('structure')
@@ -151,9 +160,30 @@ export default function AnalyzePage() {
       }
 
       sessionStorage.setItem('analysisResult', full)
+      // 保存原文文本以支持"原文定位"（限长以规避 sessionStorage 配额）
+      try {
+        sessionStorage.setItem('analysisSourceText', String(text).slice(0, 200000))
+      } catch {
+        try { sessionStorage.removeItem('analysisSourceText') } catch {}
+      }
       sessionStorage.setItem('analysisMode', mode)
       sessionStorage.setItem('fileName', file.name)
       sessionStorage.setItem('analysisStandard', standard)
+      sessionStorage.setItem(
+        'analysisScope',
+        JSON.stringify({
+          pageCount: pageCount ?? null,
+          charCount: charCount ?? null,
+          truncated: !!truncated,
+        })
+      )
+      // 等待确定性指标重算结果（最多不额外阻塞太久——流式分析通常更慢）
+      try {
+        const figuresData = await figuresPromise
+        sessionStorage.setItem('analysisFigures', figuresData ? JSON.stringify(figuresData) : '')
+      } catch {
+        sessionStorage.setItem('analysisFigures', '')
+      }
       setStage('done')
       // 直接跳转到结果页（产品化体验）
       router.push('/results')
@@ -310,9 +340,9 @@ export default function AnalyzePage() {
               lineHeight: 1.7,
             }}
           >
-            首次复核通常 30–60 秒。完成后将自动跳转至结果页。
+            完整复核通常需要 1–2 分钟，长报告可能更久。完成后将自动跳转至结果页。
             <br />
-            文件仅用于本次分析，不做存储或训练。
+            报告内容将发送至第三方大模型服务商进行分析处理。
           </div>
 
         </div>
@@ -411,17 +441,25 @@ export default function AnalyzePage() {
             )}
           </div>
 
-          <p
+          <div
             style={{
-              color: TEXT_MUTED,
-              fontSize: '12px',
               marginTop: '14px',
-              marginBottom: 0,
-              lineHeight: 1.6,
+              backgroundColor: '#fffbeb',
+              border: '1px solid #fde68a',
+              borderRadius: '8px',
+              padding: '10px 12px',
+              color: '#92400e',
+              fontSize: '12.5px',
+              lineHeight: 1.65,
+              display: 'flex',
+              gap: '8px',
             }}
           >
-            建议上传已公开发布的财务报告。如需上传内部草稿，请先进行脱敏处理（删除公司名称、替换敏感数字）。
-          </p>
+            <span style={{ flexShrink: 0 }}>⚠️</span>
+            <span>
+              报告内容将发送至<strong>第三方大模型服务商</strong>进行分析处理。请优先上传<strong>已公开发布</strong>的财务报告；如需上传内部草稿，请先脱敏（删除公司名称、替换敏感数字）。请勿上传涉密或受保密义务约束的文件。
+            </span>
+          </div>
         </div>
 
         {/* 准则识别 — 自动识别为主，仅在用户选择展开时显示手动覆盖 */}
@@ -616,7 +654,7 @@ export default function AnalyzePage() {
         </button>
 
         <p style={{ color: TEXT_MUTED, fontSize: '12px', textAlign: 'center', marginTop: '12px' }}>
-          文件仅用于本次分析，不做存储或训练，分析完成后自动删除
+          报告内容将发送至第三方大模型服务商进行分析处理 · 建议优先上传已公开报告，内部草稿请先脱敏
         </p>
       </div>
 
@@ -662,7 +700,7 @@ export default function AnalyzePage() {
               上传确认
             </h2>
             <p style={{ color: TEXT_SECONDARY, fontSize: '13.5px', lineHeight: 1.7, marginBottom: '24px' }}>
-              请确认您有权上传此文件，且已了解本平台仅用于分析本次内容，不做任何存储、传输或模型训练用途。
+              请确认您有权上传此文件，并已了解：为完成分析，报告内容将通过网络发送至第三方大模型服务商（DeepSeek / 火山方舟等）进行处理。我们不会主动留存您的报告，但无法对第三方服务商的数据处理作出担保。请勿上传涉密或未公开的敏感报告，内部草稿请先脱敏。
             </p>
             <div style={{ display: 'flex', gap: '10px' }}>
               <button

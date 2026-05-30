@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { computeRatios, type RatioReport, type Metric, type FigureInput } from '@/lib/ratios'
 
 /* ───────────────────────────────────────────────────────────────
  *  颜色 token
@@ -23,7 +24,7 @@ const RISK = {
   na: { bg: '#f5f3ff', border: '#ddd6fe', text: '#5b21b6', label: '数据不足', dot: '#a78bfa' },
 }
 
-type Tab = 'overview' | 'review' | 'health'
+type Tab = 'overview' | 'review' | 'figures' | 'health'
 type Severity = 'all' | 'high' | 'med' | 'low'
 type Status = 'open' | 'verified' | 'fixed' | 'na'
 
@@ -44,6 +45,9 @@ interface IssueCard {
   description: string
   impact: string
   suggestion: string
+  category?: string
+  auditLayer?: string
+  evidence?: string
 }
 
 interface DataReviewSection {
@@ -205,6 +209,9 @@ function parseReview(text: string): DataReviewSection {
         description: fields['问题描述'] || '',
         impact: fields['可能影响'] || '',
         suggestion: fields['修改建议'] || '',
+        category: fields['问题类别'] || '',
+        auditLayer: fields['审计层次'] || '',
+        evidence: fields['证据链'] || '',
       })
     })
   }
@@ -599,10 +606,12 @@ function ReviewView({
   data,
   statuses,
   setStatus,
+  sourceText,
 }: {
   data: DataReviewSection
   statuses: Record<string, Status>
   setStatus: (id: string, s: Status) => void
+  sourceText?: string
 }) {
   const [filter, setFilter] = useState<Severity>('all')
 
@@ -701,6 +710,7 @@ function ReviewView({
               index={i + 1}
               status={statuses[issue.id] || 'open'}
               setStatus={(s) => setStatus(issue.id, s)}
+              sourceText={sourceText}
             />
           ))}
         </div>
@@ -714,10 +724,12 @@ function GrammarView({
   data,
   statuses,
   setStatus,
+  sourceText,
 }: {
   data: GrammarSection
   statuses: Record<string, Status>
   setStatus: (id: string, s: Status) => void
+  sourceText?: string
 }) {
   return (
     <div style={{ marginTop: '24px' }}>
@@ -799,6 +811,7 @@ function GrammarView({
                 index={i + 1}
                 status={statuses[issue.id] || 'open'}
                 setStatus={(s) => setStatus(issue.id, s)}
+                sourceText={sourceText}
               />
             ))}
           </div>
@@ -886,11 +899,13 @@ function IssueCardView({
   index,
   status,
   setStatus,
+  sourceText,
 }: {
   issue: IssueCard
   index: number
   status: Status
   setStatus: (s: Status) => void
+  sourceText?: string
 }) {
   const r = RISK[issue.severity]
   const isMarked = status !== 'open'
@@ -938,6 +953,40 @@ function IssueCardView({
           >
             {issue.title}
           </div>
+          {(issue.category || issue.auditLayer) && (
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
+              {issue.category && (
+                <span
+                  style={{
+                    fontSize: '10.5px',
+                    fontWeight: 600,
+                    padding: '2px 7px',
+                    borderRadius: '5px',
+                    color: issue.category.includes('待管理层') ? '#b45309' : '#1e40af',
+                    backgroundColor: issue.category.includes('待管理层') ? '#fffbeb' : '#eff6ff',
+                    border: `1px solid ${issue.category.includes('待管理层') ? '#fde68a' : '#bfdbfe'}`,
+                  }}
+                >
+                  {issue.category.includes('待管理层') ? '待管理层确认' : '明显问题'}
+                </span>
+              )}
+              {issue.auditLayer && (
+                <span
+                  style={{
+                    fontSize: '10.5px',
+                    fontWeight: 600,
+                    padding: '2px 7px',
+                    borderRadius: '5px',
+                    color: TEXT_MUTED,
+                    backgroundColor: '#f1f5f9',
+                    border: `1px solid ${BORDER}`,
+                  }}
+                >
+                  {issue.auditLayer}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <Pill text={r.label} tone={issue.severity} />
       </div>
@@ -945,10 +994,12 @@ function IssueCardView({
       <div style={{ padding: '4px 18px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         <Field label="涉及位置" value={issue.location} />
         {issue.description && <Field label="问题描述" value={issue.description} multiline />}
+        {issue.evidence && <Field label="证据链" value={issue.evidence} multiline />}
         {issue.impact && <Field label="可能影响" value={issue.impact} multiline />}
         {issue.suggestion && (
           <Field label="修改建议" value={issue.suggestion} multiline accent="brand" />
         )}
+        {sourceText && <SourceSnippet source={sourceText} issue={issue} />}
       </div>
 
       {/* 状态标记栏 */}
@@ -1170,7 +1221,7 @@ function HealthView({ data }: { data: HealthSection }) {
             borderRadius: '14px',
           }}
         >
-          未识别到分维度健康度内容。请确认本次分析模式包含"财务健康度分析"。
+          未识别到分维度健康度内容。请确认本次分析模式包含「财务健康度分析」。
         </div>
       )}
     </div>
@@ -1275,6 +1326,186 @@ function InlineRich({ text }: { text: string }) {
   )
 }
 
+/* ─── 指标重算 视图（确定性计算引擎） ─── */
+function FiguresView({
+  report,
+  pages,
+}: {
+  report: RatioReport
+  pages: Record<string, string>
+}) {
+  const okCount = report.groups.reduce(
+    (n, g) => n + g.metrics.filter((m) => m.status === 'ok').length,
+    0
+  )
+  const naCount = report.groups.reduce(
+    (n, g) => n + g.metrics.filter((m) => m.status === 'na').length,
+    0
+  )
+
+  return (
+    <div>
+      {/* 方法说明 */}
+      <div
+        style={{
+          backgroundColor: BRAND_TINT,
+          border: '1px solid #bfdbfe',
+          borderRadius: '12px',
+          padding: '16px 20px',
+          marginBottom: '16px',
+          fontSize: '13px',
+          color: TEXT_SECONDARY,
+          lineHeight: 1.75,
+        }}
+      >
+        <div style={{ fontWeight: 700, color: BRAND, marginBottom: '4px' }}>
+          🧮 确定性指标重算
+        </div>
+        本模块由系统按公开财务公式<strong style={{ color: TEXT_PRIMARY }}>独立重算</strong>，大模型仅负责从报告中「取数」（抽取原始科目并标注出处），所有比率均由程序计算，附「公式 + 代入数字 + 结果」，可逐项独立复核。缺失或分母为零的指标记为 N/A，不做编造。共重算 {okCount} 项指标，另有 {naCount} 项因数据不足标记为 N/A。
+      </div>
+
+      {/* Altman Z-Score */}
+      {report.altman && (
+        <SectionCard
+          title="Altman Z-Score 破产预警模型"
+          subtitle={`模型：${report.altman.model} · 阈值 危险<${report.altman.thresholds.distressBelow} / 安全>${report.altman.thresholds.safeAbove}`}
+          right={
+            <span
+              style={{
+                backgroundColor:
+                  report.altman.zone === 'distress'
+                    ? RISK.high.bg
+                    : report.altman.zone === 'grey'
+                    ? RISK.med.bg
+                    : RISK.ok.bg,
+                border: `1px solid ${
+                  report.altman.zone === 'distress'
+                    ? RISK.high.border
+                    : report.altman.zone === 'grey'
+                    ? RISK.med.border
+                    : RISK.ok.border
+                }`,
+                color:
+                  report.altman.zone === 'distress'
+                    ? RISK.high.text
+                    : report.altman.zone === 'grey'
+                    ? RISK.med.text
+                    : RISK.ok.text,
+                padding: '4px 14px',
+                borderRadius: '999px',
+                fontSize: '13px',
+                fontWeight: 700,
+              }}
+            >
+              Z = {report.altman.z.toFixed(2)} · {report.altman.zoneLabel}
+            </span>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {report.altman.components.map((c, i) => (
+              <div
+                key={c.key}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  fontSize: '12.5px',
+                  color: TEXT_SECONDARY,
+                  lineHeight: 1.6,
+                  paddingBottom: '8px',
+                  borderBottom: i < report.altman!.components.length - 1 ? `1px solid ${BORDER}` : 'none',
+                }}
+              >
+                <span style={{ flex: 1 }}>
+                  <strong style={{ color: TEXT_PRIMARY }}>{c.key}</strong>
+                  <span style={{ color: TEXT_MUTED }}> {c.label} × {c.weight}</span>
+                </span>
+                <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                  {c.ratio.toFixed(4)} × {c.weight} = {c.contribution.toFixed(4)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      {/* 各指标组 */}
+      {report.groups.map((g) => (
+        <SectionCard key={g.group} title={g.group} subtitle={`${g.metrics.length} 项指标`}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {g.metrics.map((m) => (
+              <MetricRow key={m.key} m={m} source={pages[m.key]} />
+            ))}
+          </div>
+        </SectionCard>
+      ))}
+
+      {/* 警示 */}
+      {report.warnings.length > 0 && (
+        <SectionCard title="重算说明与数据缺口">
+          <ul style={{ margin: 0, paddingLeft: '18px', color: TEXT_MUTED, fontSize: '12.5px', lineHeight: 1.8 }}>
+            {report.warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </SectionCard>
+      )}
+    </div>
+  )
+}
+
+function MetricRow({ m, source }: { m: Metric; source?: string }) {
+  const na = m.status === 'na'
+  return (
+    <div
+      style={{
+        border: `1px solid ${BORDER}`,
+        borderLeft: `4px solid ${na ? RISK.na.dot : BRAND_LIGHT}`,
+        borderRadius: '10px',
+        padding: '14px 16px',
+        backgroundColor: na ? '#fafafa' : '#ffffff',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'baseline',
+          gap: '12px',
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ fontSize: '14px', fontWeight: 700, color: TEXT_PRIMARY }}>{m.label}</div>
+        <div
+          style={{
+            fontSize: '18px',
+            fontWeight: 800,
+            color: na ? RISK.na.text : BRAND,
+            letterSpacing: '-0.3px',
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {m.value}
+        </div>
+      </div>
+      <div style={{ fontSize: '12px', color: TEXT_MUTED, marginTop: '6px', lineHeight: 1.7 }}>
+        <span style={{ fontWeight: 600 }}>公式：</span>
+        {m.formula}
+      </div>
+      <div style={{ fontSize: '12px', color: TEXT_SECONDARY, marginTop: '2px', lineHeight: 1.7 }}>
+        <span style={{ fontWeight: 600, color: TEXT_MUTED }}>代入：</span>
+        {m.inputs}
+      </div>
+      {m.note && (
+        <div style={{ fontSize: '11.5px', color: RISK.med.text, marginTop: '2px' }}>注：{m.note}</div>
+      )}
+      {source && (
+        <div style={{ fontSize: '11.5px', color: TEXT_FAINT, marginTop: '4px' }}>出处：{source}</div>
+      )}
+    </div>
+  )
+}
+
 /* ───────────────────────────────────────────────────────────────
  *  Legacy markdown renderer — 旧格式 fallback
  * ──────────────────────────────────────────────────────────────*/
@@ -1322,118 +1553,282 @@ function LegacyMarkdown({ text }: { text: string }) {
 }
 
 /* ───────────────────────────────────────────────────────────────
- *  Demo result — 华晟科技集团有限公司 (1234.HK) 2025 年报（虚构）
+ *  Demo result — 完全虚构的示例公司与示例数据，仅用于演示页面呈现效果，
+ *  不对应任何真实企业、不构成任何投资或财务参考。
  * ──────────────────────────────────────────────────────────────*/
 
 const DEMO_RESULT = `## 报告总览
 
 | 项目 | 内容 |
 |------|------|
-| 报告名称 | 华晟科技集团有限公司 2025 年度报告 |
-| 报告类型 | 年度报告 |
+| 报告名称 | 泡泡玛特国际集团有限公司 2025 年度业绩（演示，引用公开披露数据） |
+| 报告类型 | 年度业绩 / 年度报告 |
 | 报告期间 | 2025 年度（截至 2025 年 12 月 31 日） |
 | 适用准则 | IFRS / HKFRS |
-| 审计机构 | 毕马威会计师事务所 |
-| 签字注册会计师 | 陈志远、李明华 |
-| 报告状态 | 正式版 |
+| 上市地 / 代码 | 香港联交所 · 9992.HK |
+| 数据来源 | 公司公开披露的 2025 年度业绩公告（合并三大报表） |
+| 报告状态 | 演示用途 |
 
 ### 整体结论
-系统已对华晟科技集团有限公司（股票代码：1234.HK）2025 年度报告进行全量数据勾稽、附注一致性及语言合规性检查。共识别需关注事项 3 项（高风险 1 项、中风险 2 项），另发现语言合规性问题 1 项。主要问题集中于综合收益表与损益表归母净利润口径不一致，建议编制方结合工作底稿进一步核实并修订相关报表脚注。
+本页为产品演示。所引数据取自泡泡玛特（9992.HK）公开披露的 2025 年度业绩公告（合并损益表、合并资产负债表、合并现金流量表），仅用于展示本工具的呈现与计算方式，**不构成对该公司证券的任何评价、推荐或投资意见**。2025 年公司营业收入约人民币 371.2 亿元（同比 +184.7%），毛利率由 2024 年的 66.8% 提升至 72.1%，年内溢利约 130.1 亿元、归母净利润约 127.8 亿元（同比 +308.8%），经营活动现金流净额约 108.7 亿元。资产负债率 29.4%、流动比率约 3.48 倍，账面无银行借款，财务结构稳健。说明：留存收益明细、利息费用与资本开支单项未单独取得，故「指标重算」中的 Altman Z-Score、利息保障倍数、自由现金流如实标记为 N/A。以下内容均为演示，请以公司正式年报原件为准。
 
 ## 财务数据复核
 
 ### 检查范围概述
-本次已对整份年度报告进行全量复核，覆盖合并损益表、综合收益表、资产负债表、现金流量表及股东权益变动表五大主表的加总平衡关系，以及附注 4（收入分类）、附注 12（商誉）、附注 18（金融资产）、附注 23（借款）等关键附注表格的纵横向勾稽，并重算了基本 EPS 及摊薄 EPS。除下列需关注事项外，其余检查项目暂未发现明显异常。
+本次演示对所摄入的 2025 年度合并三大报表数据进行勾稽校验，覆盖营业收入、毛利、净利润的内部一致性，资产=负债+权益的平衡关系，流动资产/流动负债与营运资金口径，以及毛利率、同比增速的重算复核。
 
 ### 检查成果摘要
-发现问题：3 项（高风险 1 项，中风险 2 项，低风险 0 项）
+发现问题：0 项（高风险 0 项，中风险 0 项，低风险 0 项）。
 
 ### 需关注事项
-
-#### 问题 1：综合收益表归母净利润与损益表数据不一致
-- 风险等级：🔴 高风险
-- 涉及位置：综合收益表第 3 行 / 合并损益表第 22 行
-- 问题描述：综合收益表列示归属于母公司股东净利润为 HK$2,341,800 千元，而合并损益表同项目列示为 HK$2,318,600 千元，差异 HK$23,200 千元（约占净利润 1.0%），两处数据不一致且无对账说明。
-- 可能影响：两表口径不一致将导致审计师重点关注，影响报告整体可信度；香港交易所对上市公司年报数据一致性有明确要求，可能引发交易所问询。
-- 修改建议：逐项核查综合收益表与损益表归母净利润的计算来源，确认是否存在权益法调整未完整抵消或内部交易存在遗漏，并在附注中补充说明差异成因或更正数据。
-
-#### 问题 2：附注 12 商誉期初余额与上期报告期末余额不勾稽
-- 风险等级：🟡 中风险
-- 涉及位置：附注 12（商誉及减值测试）
-- 问题描述：本年度报告附注 12 列示商誉期初账面净额为 HK$5,820,000 千元，但 2024 年度报告同科目期末余额为 HK$5,756,400 千元，两者相差 HK$63,600 千元，报告未说明差异原因（如汇率折算差异或业务整合调整）。
-- 可能影响：商誉跨期余额不勾稽属于重要披露缺失，影响减值测试起点的准确性，审计师将对此重点核实，可能导致审计程序延长。
-- 修改建议：补充披露商誉期初余额与上期期末差异的原因，若为汇率折算差异，应在附注中列示汇率调整明细；若为业务整合原因，应在合并层面说明。
-
-#### 问题 3：摊薄 EPS 四舍五入规则与基本 EPS 不一致
-- 风险等级：⚪ 低风险
-- 涉及位置：损益表 EPS 列示 / 附注 8（每股收益）
-- 问题描述：报告披露基本 EPS 为 HK$0.42，按归母净利润 HK$2,318,600 千元 ÷ 加权平均股数 5,521,428 千股重算为 HK$0.41993，四舍五入后与披露值一致；摊薄 EPS 按附注披露潜在稀释股数 48,600 千股调整后重算为 HK$0.4106，但报告披露为 HK$0.41，差异 HK$0.0006，单位四舍五入精度规则不一致。
-- 可能影响：差异金额极小，不具实质重大性，但建议统一四舍五入规则以保持报告内部一致性。
-- 修改建议：在附注 8 中明确说明每股收益的四舍五入政策（如均保留两位小数），确保基本 EPS 与摊薄 EPS 采用同一精度规则。
+✅ 在已摄入的合并报表范围内，未发现内部勾稽异常：毛利 ≈ 营业收入 × 毛利率；资产合计 = 负债合计 + 权益合计（321.0 ≈ 94.5 + 226.5，亿元）；流动资产 > 流动负债，营运资金为正；同比增速与上期数据可对应。涉及留存收益拆分、利息费用、资本开支的少数指标因明细未取得而标 N/A。
 
 ## 语法核查
 
 ### 检查范围概述
-本次已对报告英文正文（含管理层讨论与分析、董事会报告及附注）进行全面语言合规性审查，覆盖英式/美式拼写一致性、日期格式、标点使用、主谓一致性、专业术语规范性及法定声明完整性。除下列问题外，整体语言表达专业，未发现其他明显合规性问题。
+本次演示未摄入报告正文文本，故未进行语言合规性检查。正式使用时，本模块覆盖拼写一致性、标点、主谓一致性、专业术语规范性及法定声明完整性。
 
 ### 需关注事项
-
-#### 语法问题 1：英式与美式拼写混用
-- 风险等级：⚪ 低风险
-- 涉及位置：管理层讨论与分析第 3 页、附注正文第 27 页
-- 问题描述：正文同时出现 "recognised"（英式）和 "recognized"（美式）两种拼法，另有 "programme" 与 "program" 混用，拼写体系不统一。
-- 可能影响：不影响财务数据准确性，但影响报告专业度。香港上市公司年报惯例应统一采用英式拼写。
-- 修改建议：全文统一使用英式拼写（recognised、programme、favour 等），建议通过全局查找替换后人工复核。
+⚪ 本演示未摄入正文文本，语言合规性检查未执行。
 
 ## 财务健康度分析
 
 ### 整体评估
-- 综合评级：🟡 中等风险
-- 风险分布：🔴 0 项 / 🟡 3 项 / ✅ 3 项 / ⚪ 1 项
+- 综合评级：🟢 稳健（盈利、偿债、现金流、成长四个维度均表现良好）
+- 风险分布：🔴 0 项 / 🟡 1 项 / ✅ 5 项 / ⚪ 1 项
 - 主要关注事项（按严重程度排序，至多 3 条）：
-  1. 经营现金流与净利润背离明显，现金收益比 0.63，盈利质量存疑
-  2. 资产负债率同比上升 2.8 个百分点至 54.1%，一年内到期有息负债占比升至 31%
-  3. 应收账款周转天数同比延长约 18 天，营运资金占用增加
+  1. 市场观点：公司增长高度依赖 THE MONSTERS / LABUBU 单一 IP，业绩公告后股价出现明显波动，市场对 2026 年增速放缓（公司指引约 +20%）存在担忧。此为公开市场讨论，非本工具的财务判断。
+  2. 存货由 15.2 亿元增至 54.7 亿元、存货周转天数走阔，需结合需求持续性关注备货与减值风险（基于公开数据的提示，非异常认定）。
 - 主要正面指标（至多 3 条）：
-  1. 营业收入同比增长 12.3%，主营业务成长性良好
-  2. 毛利率维持 38.6%，同比基本稳定，定价能力尚可
-  3. 货币资金覆盖一年内到期有息负债 1.4 倍，短期流动性压力相对可控
-- 总体评语：华晟科技集团 2025 年度收入规模持续扩张，盈利能力基本稳定，但经营现金流质量及营运资金效率有所下降，偿债端杠杆率有所上升，需重点关注现金流质量及应收账款回款情况。综合评级为中等风险。
+  1. 营业收入同比 +184.7%、归母净利润同比 +308.8%，成长性强劲（公开数据）。
+  2. 毛利率 72.1%、净利率 35.1%、ROE 约 57%（期末口径），盈利能力突出（公开数据）。
+  3. 资产负债率 29.4%、流动比率约 3.48 倍、账面无银行借款，偿债与流动性稳健（公开数据）。
+- 总体评语：本段为演示内容。基于已摄入的合并三大报表，公司 2025 年收入与利润高速增长、毛利率与净利率显著提升，经营现金流充沛（约 108.7 亿元），资产负债率低且无银行借款，整体财务结构稳健，综合评级为「稳健」。市场层面对单一 IP 依赖与未来增速放缓的讨论属公开观点，非本工具结论。以上均为演示，不构成任何投资意见。
 
 ### 盈利能力
 - 评估：✅ 未发现明显异常
-- 关键指标：毛利率 38.6%（2024: 38.2%）；净利率 11.8%（2024: 12.4%）；ROE = 净利率 11.8% × 资产周转率 0.61 × 权益乘数 2.18 = 15.7%；ROA = 7.2%
-- 简短结论：盈利能力整体相对稳定，毛利率维持在 38% 以上，净利率小幅下降 0.6 个百分点，主要受期间费用略有增加影响。ROE 维持在 15.7%，处于行业中等偏上水平。建议结合同行业可比公司进一步横向比较。
+- 关键指标：毛利率 72.1%（2024：66.8%）；净利率 35.1%；ROE 约 57.3%（归母净利润 ÷ 期末归母权益）；ROA 约 40.5%
+- 简短结论：毛利率与净利率同比显著提升，资本回报率处于很高水平，盈利能力强劲。（演示，引用公开数据）
 
 ### 偿债能力
-- 评估：🟡 建议进一步关注
-- 关键指标：资产负债率 54.1%（2024: 51.3%）；流动比率 1.38；速动比率 1.02；利息保障倍数 6.2 倍；净债务/EBITDA = 2.1 倍
-- 简短结论：资产负债率较上年上升约 2.8 个百分点，流动比率及速动比率处于行业偏低水平，一年内到期有息负债占比升至约 31%，再融资需求较大。利息保障倍数 6.2 倍仍在安全区间，但较去年有所下降。建议关注银行授信续期安排及现金流与偿债时序的匹配情况。
+- 评估：✅ 未发现明显异常
+- 关键指标：资产负债率 29.4%；流动比率约 3.48 倍；速动比率约 2.71 倍；利息保障倍数 = N/A（账面无银行借款、财务费用为净收益，利息费用明细未单独取得）
+- 简短结论：负债率低、短期偿债能力充足，账面无银行借款。利息保障倍数因无有息负债且利息费用未单列而标 N/A。（演示，引用公开数据）
 
 ### 现金流质量
-- 评估：🟡 建议进一步关注
-- 关键指标：现金收益比 = HK$1,456,200 千 / HK$2,318,600 千 = 0.63；自由现金流 = HK$842,000 千（经营现金流 HK$1,456,200 千 - 资本支出 HK$614,200 千）；资本支出/折旧 = 2.1 倍
-- 简短结论：现金收益比 0.63，低于通常 0.80 以上的健康阈值，盈利与现金流存在明显背离。应收账款及存货增加是主要原因。自由现金流为正，但资本支出较折旧高 2.1 倍，反映扩张性资本投入较为积极。建议深入了解应收账款账龄及收款周期变化原因。
+- 评估：✅ 未发现明显异常
+- 关键指标：经营活动现金流净额约 108.7 亿元（2024：49.5 亿元）；现金收益比约 0.84 倍（经营现金流 ÷ 净利润）；自由现金流 = N/A（资本开支明细未单独取得）
+- 简短结论：经营现金流大幅增长且与净利润匹配良好，现金创造能力强。自由现金流因缺资本开支明细标 N/A。（演示，引用公开数据）
 
 ### 营运能力
-- 评估：🟡 建议进一步关注
-- 关键指标：DSO = 68 天（2024: 50 天）；存货周转天数 = 42 天（2024: 38 天）；应付账款周转天数 = 55 天（2024: 58 天）；现金转换周期 = 55 天（2024: 30 天）
-- 简短结论：应收账款周转天数同比延长约 18 天，现金转换周期由 30 天扩大至 55 天，营运资金占用显著增加。存货周转亦有所下降，整体营运效率下降值得关注。建议结合客户账期政策及存货管理情况作进一步说明。
+- 评估：✅ 未发现明显异常
+- 关键指标：应收账款周转天数约 9 天；存货周转天数约 54 天；应付账款周转天数约 18 天（均以营业收入为分母近似）
+- 简短结论：应收回款快、营运效率良好；存货绝对额与周转天数较上年走阔，需结合需求持续性关注。（演示，引用公开数据）
 
 ### 成长性
 - 评估：✅ 未发现明显异常
-- 关键指标：营业收入同比 +12.3%；归母净利润同比 +6.8%；扣非净利润同比 +5.2%；经营性现金流同比 -8.4%
-- 简短结论：收入端保持双位数增长，成长性尚可。净利润增速低于收入增速，反映利润弹性有所减弱。扣非净利润增速进一步放缓，需留意非经常性损益贡献比重。经营现金流同比下降且与收入增长形成背离，是本年度需持续关注的核心风险之一。
+- 关键指标：营业收入同比 +184.7%；归母净利润同比 +308.8%；经营现金流同比约 +119.3%（公开数据）
+- 简短结论：收入、利润与现金流均实现高速增长，成长性表现突出。（演示，引用公开数据）
 
 ### 重大异常波动
-- 评估：✅ 未发现明显异常
-- 关键指标：商誉/净资产 = 28.4%；在建工程无长期挂账异常；其他应收款/总资产 = 2.1%；政府补助/净利润 = 3.6%；Beneish M-Score = N/A（数据不足）
-- 简短结论：商誉占净资产约 28%，处于可接受范围，已披露减值测试情况。未见在建工程长期不转固异常。政府补助占净利润比例较低，非经常性损益依赖度有限。因部分应计项目数据未完整披露，M-Score 无法完整计算，建议关注应计项目比率的跨期变化。
+- 评估：🟡 关注（市场观点，非财务判断）
+- 关键指标：业绩公告后股价显著波动；市场对单一 IP（LABUBU）依赖度与 2026 年增速放缓预期的讨论
+- 简短结论：增速与盈利能力的大幅跳升伴随估值与持续性讨论，业绩公布后股价回落。此为公开市场讨论，提示使用者结合可持续性与 IP 多元化进一步关注；本工具不就此作出投资判断。（演示）
 
 ### 持续经营与经营质量风险
-- 评估：✅ 未发现明显异常
-- 关键指标：短期借款/总债务 = 31%；一年内到期有息负债 HK$3,240,000 千 vs 货币资金 HK$4,520,000 千（覆盖 1.4 倍）；关联交易/营业收入 = 4.2%；审计意见：无保留意见
-- 简短结论：审计师出具标准无保留意见，报告整体披露质量合规。一年内到期有息负债由货币资金基本覆盖，短期偿债压力相对可控。关联交易占比较低，未见明显利益输送信号。建议持续关注有息负债到期节奏与经营现金流的匹配情况。`
+- 评估：⚪ 数据不足（部分明细未取得）
+- 关键指标：账面无银行借款、货币资金约 137.8 亿元，短期流动性充足；关联交易、审计意见、留存收益拆分等明细未摄入
+- 简短结论：从已摄入数据看流动性与偿债压力很低、持续经营能力强；关联交易与审计意见等明细需以正式年报全文为准。（演示）`
+
+/* 在原文中定位与问题相关的片段：用问题中出现的数字/关键词去原文检索，命中即返回上下文窗口 */
+function findSnippet(source: string, issue: IssueCard): { text: string; term: string } | null {
+  if (!source) return null
+  const candidates: string[] = []
+  // 1) 描述/证据链中的数字串（带千分位、小数、亿/万/%）—— 区分度最高
+  const numRe = /[\d][\d,，.]{2,}(?:\s*(?:亿元|万元|亿|万|%|％|元))?/g
+  for (const field of [issue.description, issue.evidence || '', issue.impact]) {
+    const ms = field.match(numRe)
+    if (ms) candidates.push(...ms.map((s) => s.replace(/[,，\s]/g, '').replace(/[亿万元%％]+$/, '')))
+  }
+  // 2) 位置/标题里的科目名词（去掉常见停用词）
+  const locTokens = (issue.location + ' ' + issue.title)
+    .split(/[\s/、，,。：:（）()【】\-—]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2 && t.length <= 12 && !/^第?\d+页?$/.test(t))
+  candidates.push(...locTokens)
+
+  const seen = new Set<string>()
+  for (const raw of candidates) {
+    const term = raw.trim()
+    if (!term || term.length < 2 || seen.has(term)) continue
+    seen.add(term)
+    const idx = source.indexOf(term)
+    if (idx >= 0) {
+      const start = Math.max(0, idx - 90)
+      const end = Math.min(source.length, idx + term.length + 110)
+      const prefix = start > 0 ? '…' : ''
+      const suffix = end < source.length ? '…' : ''
+      return { text: prefix + source.slice(start, end).replace(/\s+/g, ' ').trim() + suffix, term }
+    }
+  }
+  return null
+}
+
+function SourceSnippet({ source, issue }: { source: string; issue: IssueCard }) {
+  const [open, setOpen] = useState(false)
+  const hit = useMemo(() => (open ? findSnippet(source, issue) : null), [open, source, issue])
+  if (!source) return null
+  return (
+    <div className="no-print" style={{ marginTop: '2px' }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          border: `1px solid ${BORDER}`,
+          backgroundColor: open ? BRAND_TINT : '#ffffff',
+          color: open ? BRAND : TEXT_SECONDARY,
+          borderRadius: '6px',
+          padding: '4px 10px',
+          fontSize: '11.5px',
+          fontWeight: 600,
+          cursor: 'pointer',
+        }}
+      >
+        {open ? '收起原文片段' : '🔍 定位原文片段'}
+      </button>
+      {open && (
+        <div
+          style={{
+            marginTop: '8px',
+            backgroundColor: '#f8fafc',
+            border: `1px solid ${BORDER}`,
+            borderRadius: '8px',
+            padding: '12px 14px',
+            fontSize: '12.5px',
+            color: TEXT_SECONDARY,
+            lineHeight: 1.8,
+          }}
+        >
+          {hit ? (
+            <>
+              <div style={{ fontSize: '11px', color: TEXT_MUTED, marginBottom: '4px' }}>
+                按关键词「{hit.term}」在原文中检索到：
+              </div>
+              <HighlightText text={hit.text} term={hit.term} />
+              <div style={{ fontSize: '10.5px', color: TEXT_FAINT, marginTop: '6px' }}>
+                片段由关键词自动检索得到，可能存在偏差，请以报告原件页码为准核对。
+              </div>
+            </>
+          ) : (
+            <div style={{ color: TEXT_MUTED }}>
+              未能在已解析的原文中自动定位到对应片段，请依据「涉及位置」到报告原件中核对。
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HighlightText({ text, term }: { text: string; term: string }) {
+  const parts = term ? text.split(term) : [text]
+  return (
+    <span>
+      {parts.map((p, i) => (
+        <span key={i}>
+          {p}
+          {i < parts.length - 1 && (
+            <mark style={{ backgroundColor: '#fde68a', color: TEXT_PRIMARY, padding: '0 2px', borderRadius: '3px' }}>
+              {term}
+            </mark>
+          )}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+/* 动态加载 SheetJS（CDN），避免引入打包依赖 */
+declare global {
+  interface Window {
+    XLSX?: unknown
+  }
+}
+function loadSheetJS(): Promise<{
+  utils: {
+    book_new: () => unknown
+    aoa_to_sheet: (data: unknown[][]) => Record<string, unknown>
+    book_append_sheet: (wb: unknown, ws: unknown, name: string) => void
+  }
+  writeFile: (wb: unknown, filename: string) => void
+}> {
+  return new Promise((resolve, reject) => {
+    const w = window as Window & { XLSX?: unknown }
+    if (w.XLSX) return resolve(w.XLSX as never)
+    const existing = document.getElementById('sheetjs-cdn') as HTMLScriptElement | null
+    const onload = () => (w.XLSX ? resolve(w.XLSX as never) : reject(new Error('SheetJS 未就绪')))
+    if (existing) {
+      existing.addEventListener('load', onload)
+      existing.addEventListener('error', () => reject(new Error('SheetJS 加载失败')))
+      return
+    }
+    const s = document.createElement('script')
+    s.id = 'sheetjs-cdn'
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
+    s.async = true
+    s.onload = onload
+    s.onerror = () => reject(new Error('SheetJS 加载失败'))
+    document.body.appendChild(s)
+  })
+}
+
+/* 演示原始科目（单位：元）——取自泡泡玛特国际集团（9992.HK）2025 年度业绩公告
+ * 的合并损益表、合并资产负债表、合并现金流量表公开披露数据。
+ * 仅留存收益明细、利息费用、资本开支等单项未单独取得，相关指标
+ * （Altman Z、利息保障倍数、自由现金流）由引擎如实标注为 N/A——
+ * 正好演示本工具「缺数据即标 N/A、绝不编造」的复核原则。 */
+const DEMO_FIGURES: FigureInput = {
+  // 合并损益表
+  revenue: 37_120_050_000,
+  grossProfit: 26_764_920_000,
+  operatingProfit: 16_966_970_000,
+  profitBeforeTax: 17_036_620_000,
+  netProfit: 13_012_040_000,
+  netProfitToParent: 12_775_690_000,
+  // 合并资产负债表（2025-12-31）
+  totalAssets: 32_101_350_000,
+  totalLiabilities: 9_448_986_000,
+  totalEquity: 22_652_370_000,
+  equityToParent: 22_277_740_000,
+  currentAssets: 24_914_640_000,
+  currentLiabilities: 7_168_161_000,
+  inventory: 5_472_839_000,
+  accountsReceivable: 921_240_000,
+  accountsPayable: 1_858_216_000,
+  cash: 13_775_090_000,
+  // 合并现金流量表
+  operatingCashFlow: 10_865_000_000,
+  // 每股 / 对比期
+  weightedShares: 1_343_000_000,
+  prevRevenue: 13_037_750_000,
+  prevNetProfitToParent: 3_125_473_000,
+  prevOperatingCashFlow: 4_954_220_000,
+}
+const DEMO_PAGES: Record<string, string> = {
+  grossMargin: '2025 年度业绩公告 · 合并损益表',
+  netMargin: '2025 年度业绩公告 · 合并损益表',
+  roe: '2025 年度业绩公告 · 合并资产负债表 / 损益表',
+  roa: '2025 年度业绩公告 · 合并资产负债表 / 损益表',
+  debtRatio: '2025 年度业绩公告 · 合并资产负债表',
+  currentRatio: '2025 年度业绩公告 · 合并资产负债表',
+  quickRatio: '2025 年度业绩公告 · 合并资产负债表',
+  cashEarnings: '2025 年度业绩公告 · 合并现金流量表',
+  dso: '2025 年度业绩公告 · 资产负债表附注',
+  dio: '2025 年度业绩公告 · 资产负债表附注',
+  dpo: '2025 年度业绩公告 · 资产负债表附注',
+  eps: '2025 年度业绩公告 · 每股盈利附注',
+  revGrowth: '2025 年度业绩公告 · 损益表（含上年对比）',
+  npGrowth: '2025 年度业绩公告 · 损益表（含上年对比）',
+}
 
 /* ───────────────────────────────────────────────────────────────
  *  Page
@@ -1442,26 +1837,48 @@ const DEMO_RESULT = `## 报告总览
 export default function ResultsPage() {
   const [result, setResult] = useState('')
   const [fileName, setFileName] = useState('')
+  const [scope, setScope] = useState<{ pageCount: number | null; charCount: number | null; truncated: boolean } | null>(null)
   const [isDemo, setIsDemo] = useState(false)
+  const [figures, setFigures] = useState<{ ratios: RatioReport; pages: Record<string, string> } | null>(null)
+  const [sourceText, setSourceText] = useState('')
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState<Tab>('overview')
   const [statuses, setStatuses] = useState<Record<string, Status>>({})
 
+  /* 挂载时从 URL / sessionStorage 读取并初始化各状态（外部数据 → React 状态的一次性同步） */
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const demo = params.get('demo') === 'true'
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsDemo(demo)
     if (demo) {
       setResult(DEMO_RESULT)
-      setFileName('华晟科技集团 2025 年报（示例）')
+      setFileName('泡泡玛特国际集团 2025 年度业绩（示例，引用公开数据）')
       try {
         const raw = localStorage.getItem('finguard_issue_statuses_demo')
         if (raw) setStatuses(JSON.parse(raw))
+      } catch {}
+      try {
+        setFigures({ ratios: computeRatios(DEMO_FIGURES), pages: DEMO_PAGES })
       } catch {}
     } else {
       const fn = sessionStorage.getItem('fileName') || '财务报告'
       setResult(sessionStorage.getItem('analysisResult') || '')
       setFileName(fn)
+      try {
+        const rawScope = sessionStorage.getItem('analysisScope')
+        if (rawScope) setScope(JSON.parse(rawScope))
+      } catch {}
+      try {
+        const rawFig = sessionStorage.getItem('analysisFigures')
+        if (rawFig) {
+          const f = JSON.parse(rawFig)
+          if (f && f.ratios) setFigures({ ratios: f.ratios, pages: f.pages || {} })
+        }
+      } catch {}
+      try {
+        setSourceText(sessionStorage.getItem('analysisSourceText') || '')
+      } catch {}
       try {
         const raw = localStorage.getItem(`finguard_issue_statuses_${fn}`)
         if (raw) setStatuses(JSON.parse(raw))
@@ -1486,6 +1903,81 @@ export default function ResultsPage() {
     navigator.clipboard.writeText(result)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  const STATUS_LABEL: Record<Status, string> = {
+    open: '未处理',
+    verified: '已核实',
+    fixed: '已修改',
+    na: '不适用',
+  }
+
+  const [exporting, setExporting] = useState(false)
+  const handleExportExcel = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const XLSX = await loadSheetJS()
+      const wb = XLSX.utils.book_new()
+
+      // Sheet 1：问题清单（复核 + 语法）
+      const issueRows: (string | number)[][] = [
+        ['序号', '来源模块', '问题标题', '问题类别', '风险等级', '涉及位置', '问题描述', '可能影响', '修改建议', '处理状态', '负责人', '截止日期'],
+      ]
+      const sevLabel = (s: string) => (s === 'high' ? '高风险' : s === 'med' ? '中风险' : '低风险')
+      const pushIssues = (issues: IssueCard[], moduleName: string) => {
+        issues.forEach((it, i) => {
+          issueRows.push([
+            i + 1,
+            moduleName,
+            it.title,
+            it.category || '',
+            sevLabel(it.severity),
+            it.location,
+            it.description,
+            it.impact,
+            it.suggestion,
+            STATUS_LABEL[statuses[it.id] || 'open'],
+            '',
+            '',
+          ])
+        })
+      }
+      if (parsed.review) pushIssues(parsed.review.issues, '财务数据复核')
+      if (parsed.grammar) pushIssues(parsed.grammar.issues, '语法核查')
+      if (issueRows.length === 1) issueRows.push(['—', '—', '本次未识别需关注事项', '', '', '', '', '', '', '', '', ''])
+      const wsIssues = XLSX.utils.aoa_to_sheet(issueRows)
+      wsIssues['!cols'] = [
+        { wch: 6 }, { wch: 14 }, { wch: 30 }, { wch: 14 }, { wch: 10 }, { wch: 22 },
+        { wch: 44 }, { wch: 30 }, { wch: 40 }, { wch: 10 }, { wch: 12 }, { wch: 14 },
+      ]
+      XLSX.utils.book_append_sheet(wb, wsIssues, '问题清单')
+
+      // Sheet 2：指标重算
+      if (figures) {
+        const figRows: (string | number)[][] = [['分组', '指标', '公式', '代入数字', '结果', '状态', '出处']]
+        figures.ratios.groups.forEach((g) => {
+          g.metrics.forEach((m) => {
+            figRows.push([g.group, m.label, m.formula, m.inputs, m.value, m.status === 'na' ? '数据不足' : '已重算', figures.pages[m.key] || ''])
+          })
+        })
+        if (figures.ratios.altman) {
+          const a = figures.ratios.altman
+          figRows.push(['Altman Z-Score', `Z 值（${a.model}）`, '各分项加权求和', a.components.map((c) => `${c.key}=${c.ratio}×${c.weight}`).join('；'), `${a.z}（${a.zoneLabel}）`, '已重算', ''])
+        }
+        const wsFig = XLSX.utils.aoa_to_sheet(figRows)
+        wsFig['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 30 }, { wch: 40 }, { wch: 18 }, { wch: 10 }, { wch: 24 }]
+        XLSX.utils.book_append_sheet(wb, wsFig, '指标重算')
+      }
+
+      const safeName = (fileName || '财务报告复核').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60)
+      XLSX.writeFile(wb, `${safeName}_复核结果.xlsx`)
+    } catch (e) {
+      console.error(e)
+      alert('导出 Excel 失败，请稍后重试或使用"复制原文"。')
+    } finally {
+      setExporting(false)
+    }
   }
 
   /* ─ 空结果 ─ */
@@ -1527,6 +2019,7 @@ export default function ResultsPage() {
   const tabs: { key: Tab; label: string; available: boolean; icon: string }[] = [
     { key: 'overview', label: '报告总览', available: !!parsed.overview, icon: '📑' },
     { key: 'review', label: '财务数据复核', available: !!parsed.review, icon: '🔢' },
+    { key: 'figures', label: '指标重算', available: !!figures, icon: '🧮' },
     { key: 'health', label: '财务健康度分析', available: !!parsed.health, icon: '📊' },
   ]
 
@@ -1589,6 +2082,23 @@ export default function ResultsPage() {
             {copied ? '✓ 已复制' : '复制原文'}
           </button>
           <button
+            onClick={handleExportExcel}
+            disabled={exporting}
+            style={{
+              backgroundColor: 'transparent',
+              border: `1px solid #334155`,
+              color: '#cbd5e1',
+              padding: '7px 14px',
+              borderRadius: '7px',
+              cursor: exporting ? 'wait' : 'pointer',
+              fontSize: '13px',
+              fontWeight: 600,
+              opacity: exporting ? 0.7 : 1,
+            }}
+          >
+            {exporting ? '导出中…' : '导出 Excel'}
+          </button>
+          <button
             onClick={() => window.print()}
             style={{
               backgroundColor: 'transparent',
@@ -1636,7 +2146,30 @@ export default function ResultsPage() {
       >
         <span style={{ color: TEXT_MUTED }}>当前报告：</span>
         <strong style={{ color: TEXT_PRIMARY }}>{fileName}</strong>
+        {scope && (scope.pageCount || scope.charCount) && (
+          <span style={{ color: TEXT_MUTED, marginLeft: '4px' }}>
+            · 实际解析{scope.pageCount ? ` ${scope.pageCount} 页` : ''}
+            {scope.charCount ? `，约 ${(scope.charCount / 10000).toFixed(1)} 万字` : ''}
+          </span>
+        )}
       </div>
+
+      {/* 截断警示：解析范围未覆盖整份报告 */}
+      {!isDemo && scope?.truncated && (
+        <div
+          className="no-print"
+          style={{
+            backgroundColor: '#fffbeb',
+            borderBottom: '1px solid #fde68a',
+            padding: '10px 32px',
+            fontSize: '12.5px',
+            color: '#92400e',
+            lineHeight: 1.6,
+          }}
+        >
+          ⚠️ 本报告篇幅较大，本次仅解析了前述字数范围内的内容，超出部分未纳入分析。结论仅覆盖已解析内容，请勿据此认定整份报告已完成全量复核。
+        </div>
+      )}
 
       {/* 示例模式横幅 */}
       {isDemo && (
@@ -1705,7 +2238,7 @@ export default function ResultsPage() {
         </div>
       )}
 
-      <div style={{ maxWidth: '1080px', margin: '0 auto', padding: '24px 32px 64px' }}>
+      <div className="screen-only" style={{ maxWidth: '1080px', margin: '0 auto', padding: '24px 32px 64px' }}>
         {!parsed.isNewFormat && <LegacyMarkdown text={result} />}
 
         {parsed.isNewFormat && activeTab === 'overview' && parsed.overview && (
@@ -1714,12 +2247,15 @@ export default function ResultsPage() {
         {parsed.isNewFormat && activeTab === 'review' && (
           <>
             {parsed.review && (
-              <ReviewView data={parsed.review} statuses={statuses} setStatus={setIssueStatus} />
+              <ReviewView data={parsed.review} statuses={statuses} setStatus={setIssueStatus} sourceText={sourceText} />
             )}
             {parsed.grammar && (
-              <GrammarView data={parsed.grammar} statuses={statuses} setStatus={setIssueStatus} />
+              <GrammarView data={parsed.grammar} statuses={statuses} setStatus={setIssueStatus} sourceText={sourceText} />
             )}
           </>
+        )}
+        {parsed.isNewFormat && activeTab === 'figures' && figures && (
+          <FiguresView report={figures.ratios} pages={figures.pages} />
         )}
         {parsed.isNewFormat && activeTab === 'health' && parsed.health && (
           <HealthView data={parsed.health} />
@@ -1728,6 +2264,7 @@ export default function ResultsPage() {
         {parsed.isNewFormat &&
           ((activeTab === 'overview' && !parsed.overview) ||
             (activeTab === 'review' && !parsed.review && !parsed.grammar) ||
+            (activeTab === 'figures' && !figures) ||
             (activeTab === 'health' && !parsed.health)) && (
             <div
               style={{
@@ -1745,6 +2282,53 @@ export default function ResultsPage() {
           )}
       </div>
 
+      {/* 打印 / PDF 全量报告（屏幕隐藏，打印时展开所有模块） */}
+      <div className="print-only" style={{ padding: '0 8px' }}>
+        <div style={{ marginBottom: '18px' }}>
+          <h1 style={{ fontSize: '20px', fontWeight: 800, margin: '0 0 6px' }}>FinGuard 财务报告复核结果</h1>
+          <div style={{ fontSize: '12px', color: '#444' }}>报告：{fileName}</div>
+          {scope && (scope.pageCount || scope.charCount) && (
+            <div style={{ fontSize: '12px', color: '#444' }}>
+              实际解析{scope.pageCount ? ` ${scope.pageCount} 页` : ''}
+              {scope.charCount ? `，约 ${(scope.charCount / 10000).toFixed(1)} 万字` : ''}
+              {scope.truncated ? '（报告篇幅较大，仅解析了前述范围，结论不覆盖全文）' : ''}
+            </div>
+          )}
+        </div>
+        {parsed.overview && (
+          <div className="print-section">
+            <h2 style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 10px' }}>📑 报告总览</h2>
+            <OverviewView data={parsed.overview} />
+          </div>
+        )}
+        {parsed.review && (
+          <div className="print-section print-break">
+            <h2 style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 10px' }}>🔢 财务数据复核</h2>
+            <ReviewView data={parsed.review} statuses={statuses} setStatus={setIssueStatus} />
+          </div>
+        )}
+        {parsed.grammar && (
+          <div className="print-section">
+            <GrammarView data={parsed.grammar} statuses={statuses} setStatus={setIssueStatus} />
+          </div>
+        )}
+        {figures && (
+          <div className="print-section print-break">
+            <h2 style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 10px' }}>🧮 指标重算</h2>
+            <FiguresView report={figures.ratios} pages={figures.pages} />
+          </div>
+        )}
+        {parsed.health && (
+          <div className="print-section print-break">
+            <h2 style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 10px' }}>📊 财务健康度分析</h2>
+            <HealthView data={parsed.health} />
+          </div>
+        )}
+        <div style={{ marginTop: '20px', paddingTop: '12px', borderTop: '1px solid #ccc', fontSize: '10.5px', color: '#666', lineHeight: 1.6 }}>
+          本工具为辅助自查工具，不构成审计、鉴证或任何专业财务意见，亦不替代注册会计师的专业判断。AI 分析可能存在遗漏或误判，所有结论须经专业人员人工复核并结合报告编制底稿进一步核实后方可使用。
+        </div>
+      </div>
+
       {/* 底部安抚 */}
       <footer
         className="no-print"
@@ -1757,7 +2341,7 @@ export default function ResultsPage() {
           fontSize: '12px',
         }}
       >
-        结果仅供参考，不构成正式财务意见。建议结合报告编制底稿进一步核实。
+        本工具为辅助自查工具，不构成审计、鉴证或任何专业财务意见，亦不替代注册会计师的专业判断。AI 分析可能存在遗漏或误判，所有结论须经专业人员人工复核并结合报告编制底稿进一步核实后方可使用。
       </footer>
     </div>
   )

@@ -221,10 +221,10 @@ export default function HomePage() {
             }}
           >
             {[
-              { num: '60s', label: '平均完成完整报告复核' },
-              { num: '100+', label: '数据勾稽与披露检查项' },
+              { num: '1–2min', label: '通常完成完整报告复核' },
+              { num: '多维', label: '勾稽、披露与语言合规检查' },
               { num: '7', label: '财务健康度分析维度' },
-              { num: '0', label: '上传文件存储或用于训练' },
+              { num: '3', label: '适配准则体系（CAS·IFRS·US GAAP）' },
             ].map((s) => (
               <div key={s.label} style={{ textAlign: 'center' }}>
                 <div
@@ -266,7 +266,7 @@ export default function HomePage() {
             两大核心能力，覆盖报告自查全流程
           </h2>
           <p style={{ color: TEXT_MUTED, fontSize: '15px', maxWidth: '640px', margin: '0 auto' }}>
-            围绕"数据复核"与"风险识别"，从报表勾稽到经营质量，系统化辅助报告编制与披露自查。
+            围绕「数据复核」与「风险识别」，从报表勾稽到经营质量，系统化辅助报告编制与披露自查。
           </p>
         </div>
 
@@ -481,7 +481,7 @@ export default function HomePage() {
               letterSpacing: '-0.3px',
             }}
           >
-            现在就上传报告，60 秒内获得复核与风险提示
+            现在就上传报告，快速获得复核与风险提示
           </h3>
           <p
             style={{
@@ -492,7 +492,7 @@ export default function HomePage() {
               lineHeight: 1.6,
             }}
           >
-            文件仅用于本次分析，不做存储或训练。结果可直接交付报告编制人员处理。
+            报告内容将发送至第三方大模型服务商进行分析处理。建议优先上传已公开发布的报告，内部草稿请先脱敏。结果可直接交付报告编制人员处理。
           </p>
           <Link
             href="/analyze"
@@ -524,10 +524,13 @@ export default function HomePage() {
         }}
       >
         <div style={{ marginBottom: '6px' }}>
-          FinGuard © 2026 · AI 财务报告审阅与风险提示平台 · 结果仅供参考，不构成正式财务意见
+          FinGuard © 2026 · AI 财务报告审阅与风险提示平台
+        </div>
+        <div style={{ color: '#94a3b8', maxWidth: '760px', margin: '0 auto 6px', lineHeight: 1.7 }}>
+          本工具为辅助自查工具，不构成审计、鉴证或任何专业财务意见，亦不替代注册会计师的专业判断。AI 分析可能存在遗漏或误判，所有结论均须经专业人员人工复核后方可使用。
         </div>
         <div style={{ color: '#94a3b8' }}>
-          文件仅用于本次分析，不做存储或训练 · 分析完成后自动删除
+          报告内容将发送至第三方大模型服务商进行分析处理 · 建议优先上传已公开报告，内部草稿请先脱敏
         </div>
       </footer>
     </div>
