@@ -9,6 +9,7 @@
  */
 
 import { altmanZScore, type AltmanModel, type AltmanResult } from './altman'
+import { beneishMScore, type BeneishResult } from './beneish'
 
 /** 由大模型抽取的原始科目（单位、币种需统一；本模块不做换算）。
  *  全部可选——缺失项相关指标记为 N/A。 */
@@ -40,10 +41,24 @@ export interface FigureInput {
   // 每股 / 市值
   weightedShares?: number // 加权平均普通股股数
   marketValueEquity?: number // 股权市值（上市且可得时）
+  // 折旧摊销与销管费用（Beneish 用）
+  depreciation?: number // 本期折旧与摊销
+  ppeNet?: number // 固定资产净额
+  sga?: number // 销售费用+管理费用
   // 对比期（用于增长率，可选）
   prevRevenue?: number
   prevNetProfitToParent?: number
   prevOperatingCashFlow?: number
+  // 对比期（Beneish M-Score 多期口径，可选）
+  prevGrossProfit?: number
+  prevAccountsReceivable?: number
+  prevCurrentAssets?: number
+  prevTotalAssets?: number
+  prevTotalLiabilities?: number
+  prevPpeNet?: number
+  prevDepreciation?: number
+  prevSga?: number
+  prevNetProfit?: number
 }
 
 export type MetricStatus = 'ok' | 'na'
@@ -72,6 +87,7 @@ export interface RatioGroup {
 export interface RatioReport {
   groups: RatioGroup[]
   altman?: AltmanResult
+  beneish?: BeneishResult
   warnings: string[]
 }
 
@@ -271,5 +287,34 @@ export function computeRatios(f: FigureInput): RatioReport {
     warnings.push('原始科目不足，未计算 Altman Z-Score（需总资产、总负债、营运资金、留存收益、EBIT）')
   }
 
-  return { groups, altman, warnings }
+  /* Beneish M-Score（盈余操纵预警，需本期与上期数据） */
+  const beneish = beneishMScore({
+    revenue: f.revenue,
+    grossProfit: f.grossProfit,
+    accountsReceivable: f.accountsReceivable,
+    currentAssets: f.currentAssets,
+    ppeNet: f.ppeNet,
+    depreciation: f.depreciation,
+    sga: f.sga,
+    totalAssets: f.totalAssets,
+    totalLiabilities: f.totalLiabilities,
+    netProfit: f.netProfit,
+    operatingCashFlow: f.operatingCashFlow,
+    prevRevenue: f.prevRevenue,
+    prevGrossProfit: f.prevGrossProfit,
+    prevAccountsReceivable: f.prevAccountsReceivable,
+    prevCurrentAssets: f.prevCurrentAssets,
+    prevPpeNet: f.prevPpeNet,
+    prevDepreciation: f.prevDepreciation,
+    prevSga: f.prevSga,
+    prevTotalAssets: f.prevTotalAssets,
+    prevTotalLiabilities: f.prevTotalLiabilities,
+  }) ?? undefined
+  if (!beneish) {
+    warnings.push('缺少本期或上期营业收入，未计算 Beneish M-Score（盈余操纵预警需至少两期数据）')
+  } else {
+    warnings.push(...beneish.warnings)
+  }
+
+  return { groups, altman, beneish, warnings }
 }

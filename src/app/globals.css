@@ -76,6 +76,31 @@ body {
   margin: 16mm 14mm;
 }
 
+/* 响应式网格（替代内联 gridTemplateColumns，移动端自适应） */
+.fg-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+}
+.fg-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.fg-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+@media (max-width: 880px) {
+  .fg-grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .fg-grid-2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .fg-grid-4 { grid-template-columns: 1fr; }
+  .fg-grid-3 { grid-template-columns: 1fr; }
+}
+
 /* 通用动画 */
 @keyframes fg-pulse {
   0%, 100% { opacity: 1; }

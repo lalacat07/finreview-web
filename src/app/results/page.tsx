@@ -2,27 +2,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { computeRatios, type RatioReport, type Metric, type FigureInput } from '@/lib/ratios'
-
-/* ───────────────────────────────────────────────────────────────
- *  颜色 token
- * ──────────────────────────────────────────────────────────────*/
-const NAV_BG = '#0b1220'
-const BRAND = '#1e40af'
-const BRAND_LIGHT = '#2563eb'
-const BRAND_TINT = '#eff6ff'
-const BORDER = '#e2e8f0'
-const TEXT_PRIMARY = '#0f172a'
-const TEXT_SECONDARY = '#334155'
-const TEXT_MUTED = '#64748b'
-const TEXT_FAINT = '#94a3b8'
-
-const RISK = {
-  high: { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c', label: '高风险', dot: '#dc2626' },
-  med: { bg: '#fffbeb', border: '#fde68a', text: '#b45309', label: '中风险', dot: '#f59e0b' },
-  low: { bg: '#f8fafc', border: '#e2e8f0', text: '#475569', label: '低风险', dot: '#94a3b8' },
-  ok: { bg: '#ecfdf5', border: '#a7f3d0', text: '#047857', label: '正常', dot: '#10b981' },
-  na: { bg: '#f5f3ff', border: '#ddd6fe', text: '#5b21b6', label: '数据不足', dot: '#a78bfa' },
-}
+import { type DisclosureReport } from '@/lib/disclosure'
+import {
+  NAV_BG, BRAND, BRAND_LIGHT, BRAND_TINT, BORDER,
+  TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, TEXT_FAINT, RISK,
+} from '@/lib/theme'
 
 type Tab = 'overview' | 'review' | 'figures' | 'health'
 type Severity = 'all' | 'high' | 'med' | 'low'
@@ -1330,9 +1314,11 @@ function InlineRich({ text }: { text: string }) {
 function FiguresView({
   report,
   pages,
+  disclosure,
 }: {
   report: RatioReport
   pages: Record<string, string>
+  disclosure?: DisclosureReport
 }) {
   const okCount = report.groups.reduce(
     (n, g) => n + g.metrics.filter((m) => m.status === 'ok').length,
@@ -1429,6 +1415,59 @@ function FiguresView({
         </SectionCard>
       )}
 
+      {/* Beneish M-Score */}
+      {report.beneish && (
+        <SectionCard
+          title="Beneish M-Score 盈余操纵预警模型"
+          subtitle={`8 变量模型 · 阈值 M > ${report.beneish.threshold}（高于即存在操纵特征）· 可计算变量 ${report.beneish.computedVars}/8`}
+          right={
+            <span
+              style={{
+                backgroundColor: report.beneish.flagged ? RISK.high.bg : RISK.ok.bg,
+                border: `1px solid ${report.beneish.flagged ? RISK.high.border : RISK.ok.border}`,
+                color: report.beneish.flagged ? RISK.high.text : RISK.ok.text,
+                padding: '4px 14px',
+                borderRadius: '999px',
+                fontSize: '13px',
+                fontWeight: 700,
+              }}
+            >
+              M = {report.beneish.m.toFixed(2)} · {report.beneish.flagged ? '🔴 存在操纵特征' : '✅ 未见明显操纵特征'}
+            </span>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {report.beneish.components.map((c, i) => (
+              <div
+                key={c.key}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  fontSize: '12.5px',
+                  color: TEXT_SECONDARY,
+                  lineHeight: 1.6,
+                  paddingBottom: '8px',
+                  borderBottom: i < report.beneish!.components.length - 1 ? `1px solid ${BORDER}` : 'none',
+                }}
+              >
+                <span style={{ flex: 1 }}>
+                  <strong style={{ color: TEXT_PRIMARY }}>{c.key}</strong>
+                  <span style={{ color: TEXT_MUTED }}> {c.label} × {c.weight}</span>
+                  {c.imputed && <span style={{ color: RISK.med.text }}> · 数据不足，中性代入</span>}
+                </span>
+                <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                  {c.value.toFixed(4)} × {c.weight} = {c.contribution.toFixed(4)}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: '11.5px', color: TEXT_MUTED, marginTop: '10px', lineHeight: 1.7 }}>
+            {report.beneish.zoneLabel}。M-Score 为统计预警，高分仅代表具备操纵财务特征，不等于已确认造假，须结合底稿、管理层解释与外部信息核实。
+          </div>
+        </SectionCard>
+      )}
+
       {/* 各指标组 */}
       {report.groups.map((g) => (
         <SectionCard key={g.group} title={g.group} subtitle={`${g.metrics.length} 项指标`}>
@@ -1439,6 +1478,62 @@ function FiguresView({
           </div>
         </SectionCard>
       ))}
+
+      {/* 披露完备性清单 */}
+      {disclosure && (
+        <SectionCard
+          title="披露完备性清单"
+          subtitle={`识别准则：${disclosure.detectedStandard} · 检索到 ${disclosure.presentCount} 项 / 未检索到 ${disclosure.missingCount} 项 / 不适用 ${disclosure.naCount} 项`}
+        >
+          <div
+            style={{
+              fontSize: '12px',
+              color: TEXT_MUTED,
+              lineHeight: 1.7,
+              marginBottom: '12px',
+            }}
+          >
+            按关键词在全文确定性扫描「是否提及」强制/常见披露项。<strong style={{ color: RISK.med.text }}>「未检索到」为提示而非定论</strong>——可能确实缺失，也可能仅出现在未解析章节或用语不同，须人工核查；本清单不判断披露内容是否充分。
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {disclosure.groups.map((g) => (
+              <div key={g.group}>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: TEXT_PRIMARY, marginBottom: '6px' }}>
+                  {g.group}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                  {g.items.map((it) => {
+                    const tone =
+                      it.status === 'present' ? RISK.ok : it.status === 'missing' ? RISK.med : RISK.na
+                    const icon = it.status === 'present' ? '✓' : it.status === 'missing' ? '?' : '—'
+                    return (
+                      <span
+                        key={it.key}
+                        title={it.note}
+                        style={{
+                          backgroundColor: tone.bg,
+                          border: `1px solid ${tone.border}`,
+                          color: tone.text,
+                          borderRadius: '6px',
+                          padding: '5px 10px',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <span style={{ fontWeight: 800 }}>{icon}</span>
+                        {it.label}
+                      </span>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
 
       {/* 警示 */}
       {report.warnings.length > 0 && (
@@ -1839,7 +1934,7 @@ export default function ResultsPage() {
   const [fileName, setFileName] = useState('')
   const [scope, setScope] = useState<{ pageCount: number | null; charCount: number | null; truncated: boolean } | null>(null)
   const [isDemo, setIsDemo] = useState(false)
-  const [figures, setFigures] = useState<{ ratios: RatioReport; pages: Record<string, string> } | null>(null)
+  const [figures, setFigures] = useState<{ ratios: RatioReport; pages: Record<string, string>; disclosure?: DisclosureReport } | null>(null)
   const [sourceText, setSourceText] = useState('')
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState<Tab>('overview')
@@ -1873,7 +1968,7 @@ export default function ResultsPage() {
         const rawFig = sessionStorage.getItem('analysisFigures')
         if (rawFig) {
           const f = JSON.parse(rawFig)
-          if (f && f.ratios) setFigures({ ratios: f.ratios, pages: f.pages || {} })
+          if (f && f.ratios) setFigures({ ratios: f.ratios, pages: f.pages || {}, disclosure: f.disclosure })
         }
       } catch {}
       try {
@@ -1965,9 +2060,27 @@ export default function ResultsPage() {
           const a = figures.ratios.altman
           figRows.push(['Altman Z-Score', `Z 值（${a.model}）`, '各分项加权求和', a.components.map((c) => `${c.key}=${c.ratio}×${c.weight}`).join('；'), `${a.z}（${a.zoneLabel}）`, '已重算', ''])
         }
+        if (figures.ratios.beneish) {
+          const b = figures.ratios.beneish
+          figRows.push(['Beneish M-Score', `M 值（8 变量）`, '各分项加权求和 + 截距', b.components.map((c) => `${c.key}=${c.value}×${c.weight}`).join('；'), `${b.m}（${b.flagged ? '存在操纵特征' : '未见明显操纵特征'}，可计算 ${b.computedVars}/8）`, '已重算', ''])
+        }
         const wsFig = XLSX.utils.aoa_to_sheet(figRows)
         wsFig['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 30 }, { wch: 40 }, { wch: 18 }, { wch: 10 }, { wch: 24 }]
         XLSX.utils.book_append_sheet(wb, wsFig, '指标重算')
+
+        // Sheet 3：披露完备性清单
+        if (figures.disclosure) {
+          const dRows: (string | number)[][] = [['分组', '披露项', '适用范围', '状态', '说明']]
+          const stLabel = (s: string) => (s === 'present' ? '检索到' : s === 'missing' ? '未检索到(需核查)' : '不适用')
+          figures.disclosure.groups.forEach((g) => {
+            g.items.forEach((it) => {
+              dRows.push([g.group, it.label, it.applicability, stLabel(it.status), it.note])
+            })
+          })
+          const wsD = XLSX.utils.aoa_to_sheet(dRows)
+          wsD['!cols'] = [{ wch: 18 }, { wch: 30 }, { wch: 14 }, { wch: 18 }, { wch: 44 }]
+          XLSX.utils.book_append_sheet(wb, wsD, '披露清单')
+        }
       }
 
       const safeName = (fileName || '财务报告复核').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60)
@@ -2255,7 +2368,7 @@ export default function ResultsPage() {
           </>
         )}
         {parsed.isNewFormat && activeTab === 'figures' && figures && (
-          <FiguresView report={figures.ratios} pages={figures.pages} />
+          <FiguresView report={figures.ratios} pages={figures.pages} disclosure={figures.disclosure} />
         )}
         {parsed.isNewFormat && activeTab === 'health' && parsed.health && (
           <HealthView data={parsed.health} />
@@ -2315,7 +2428,7 @@ export default function ResultsPage() {
         {figures && (
           <div className="print-section print-break">
             <h2 style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 10px' }}>🧮 指标重算</h2>
-            <FiguresView report={figures.ratios} pages={figures.pages} />
+            <FiguresView report={figures.ratios} pages={figures.pages} disclosure={figures.disclosure} />
           </div>
         )}
         {parsed.health && (

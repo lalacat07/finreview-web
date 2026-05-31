@@ -25,11 +25,20 @@ export async function POST(request: NextRequest) {
       truncated = true
     }
 
+    // 图片型/扫描型 PDF 检测：可提取文本的 PDF 每页通常有数百至上千字符，
+    // 若每页平均字符过低，极可能是扫描件/图片版，pdf-parse 抽不到正文，
+    // 会导致"未发现问题"的假阴性。需明确预警（当前未接 OCR）。
+    const pageCount = data.numpages || 0
+    const charsPerPage = pageCount > 0 ? text.length / pageCount : text.length
+    const lowText = pageCount > 0 && charsPerPage < 80 && text.trim().length < 1000
+
     return NextResponse.json({
       text,
       pageCount: data.numpages,
       truncated,
       charCount: text.length,
+      lowText,
+      charsPerPage: Math.round(charsPerPage),
     })
   } catch (error) {
     console.error('PDF extraction error:', error)

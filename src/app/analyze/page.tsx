@@ -2,21 +2,14 @@
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import {
+  NAV_BG, NAV_TEXT, BRAND, BRAND_LIGHT, BRAND_TINT, BRAND_STRONG,
+  BORDER, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
+} from '@/lib/theme'
 
 type Mode = 'review' | 'analysis' | 'both'
 type Stage = 'upload' | 'streaming' | 'done'
 type Standard = '' | 'CAS 中国企业会计准则' | 'IFRS / HKFRS' | 'US GAAP'
-
-const NAV_BG = '#0b1220'
-const NAV_TEXT = '#e2e8f0'
-const BRAND = '#1e40af'
-const BRAND_LIGHT = '#2563eb'
-const BRAND_TINT = '#eff6ff'
-const BORDER = '#e2e8f0'
-const TEXT_PRIMARY = '#0f172a'
-const TEXT_SECONDARY = '#334155'
-const TEXT_MUTED = '#64748b'
-const TEXT_FAINT = '#94a3b8'
 
 /* ───────────────────────────────────────────────────────────────
  * 解析阶段定义（用户可视化感受系统在做什么）
@@ -105,7 +98,14 @@ export default function AnalyzePage() {
         const body = await extractRes.json().catch(() => ({}))
         throw new Error(body.error || 'PDF 解析失败')
       }
-      const { text, pageCount, charCount, truncated } = await extractRes.json()
+      const { text, pageCount, charCount, truncated, lowText } = await extractRes.json()
+
+      // 图片型/扫描型 PDF：抽不到正文，继续分析只会得到"未发现问题"的假阴性，需中止并提示
+      if (lowText) {
+        throw new Error(
+          '未能从该 PDF 提取到足够的文本内容（疑似扫描件/图片版报告）。系统当前依赖可复制文本进行检查，无法识别图片中的内容，继续分析可能产生"未发现问题"的误导性结果。请改用带可复制文本的 PDF（如交易所/公司官网发布的电子版），或先对扫描件做 OCR 处理后再上传。'
+        )
+      }
 
       // 并行启动确定性指标重算（取数→后端确定性计算），不阻塞主流式分析
       const figuresPromise = fetch('/api/figures', {
@@ -392,7 +392,16 @@ export default function AnalyzePage() {
           }}
         >
           <div
+            role="button"
+            tabIndex={0}
+            aria-label="上传 PDF 财务报告：点击选择文件，或将文件拖拽至此"
             onClick={() => fileInputRef.current?.click()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                fileInputRef.current?.click()
+              }
+            }}
             onDrop={handleDrop}
             onDragOver={(e) => {
               e.preventDefault()
@@ -522,7 +531,7 @@ export default function AnalyzePage() {
                 borderTop: `1px solid ${BORDER}`,
               }}
             >
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+              <div className="fg-grid-3">
                 {standards.map((s) => {
                   const selected = standard === s.value
                   return (
@@ -570,7 +579,7 @@ export default function AnalyzePage() {
           <div style={{ fontSize: '14px', fontWeight: 700, color: TEXT_PRIMARY, marginBottom: '12px' }}>
             选择分析模式
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+          <div className="fg-grid-3">
             {modes.map((m) => {
               const selected = mode === m.value
               return (
@@ -927,8 +936,6 @@ function Spinner({ size = 18 }: { size?: number }) {
     </svg>
   )
 }
-
-const BRAND_STRONG = '#1e3a8a'
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))

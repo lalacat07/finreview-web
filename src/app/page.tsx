@@ -1,15 +1,8 @@
 import Link from 'next/link'
-
-const NAV_BG = '#0b1220'
-const NAV_TEXT = '#e2e8f0'
-const NAV_MUTED = '#94a3b8'
-const BRAND = '#1e40af'
-const BRAND_LIGHT = '#2563eb'
-const BRAND_TINT = '#eff6ff'
-const BORDER = '#e2e8f0'
-const TEXT_PRIMARY = '#0f172a'
-const TEXT_SECONDARY = '#334155'
-const TEXT_MUTED = '#64748b'
+import {
+  NAV_BG, NAV_TEXT, NAV_MUTED, BRAND, BRAND_LIGHT, BRAND_TINT, BRAND_STRONG_BG,
+  BORDER, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
+} from '@/lib/theme'
 
 export default function HomePage() {
   return (
@@ -59,7 +52,10 @@ export default function HomePage() {
             </span>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '24px', fontSize: '13px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px', fontSize: '13px' }}>
+          <Link href="/methodology" style={{ color: NAV_MUTED, textDecoration: 'none' }}>
+            检测方法论
+          </Link>
           <Link
             href="/analyze"
             style={{
@@ -207,21 +203,19 @@ export default function HomePage() {
 
           {/* Hero 下方价值条 — 浮在过渡区上 */}
           <div
+            className="fg-grid-4"
             style={{
               backgroundColor: '#ffffff',
               border: `1px solid ${BORDER}`,
               borderRadius: '14px',
               padding: '24px 32px',
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, 1fr)',
-              gap: '24px',
               boxShadow: '0 18px 48px rgba(15, 23, 42, 0.18)',
               marginBottom: '-40px',
               position: 'relative',
             }}
           >
             {[
-              { num: '1–2min', label: '通常完成完整报告复核' },
+              { num: '1–2min', label: '通常完成已解析内容复核' },
               { num: '多维', label: '勾稽、披露与语言合规检查' },
               { num: '7', label: '财务健康度分析维度' },
               { num: '3', label: '适配准则体系（CAS·IFRS·US GAAP）' },
@@ -270,13 +264,7 @@ export default function HomePage() {
           </p>
         </div>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: '20px',
-          }}
-        >
+        <div className="fg-grid-2">
           {[
             {
               icon: '🔢',
@@ -387,6 +375,61 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* ───── 差异化能力 ───── */}
+      <section
+        style={{
+          maxWidth: '1080px',
+          margin: '0 auto',
+          padding: '28px 32px 8px',
+        }}
+      >
+        <div style={{ textAlign: 'center', marginBottom: '28px' }}>
+          <h2 style={{ fontSize: '22px', fontWeight: 800, color: TEXT_PRIMARY, marginBottom: '8px' }}>
+            可复核的检测，而非黑箱判断
+          </h2>
+          <p style={{ color: TEXT_MUTED, fontSize: '14px', maxWidth: '640px', margin: '0 auto' }}>
+            关键指标由系统按公开公式独立重算并附「公式 + 代入数字」，大模型仅负责取数与文本核对。
+          </p>
+        </div>
+        <div className="fg-grid-4" style={{ gap: '14px' }}>
+          {[
+            { icon: '🧮', title: '确定性重算引擎', desc: 'EPS、ROE、周转率等由程序按公式重算，可逐项独立复核，规避大模型心算误差' },
+            { icon: '📉', title: 'Altman Z-Score', desc: '采用 Altman 公开公式做破产 / 持续经营预警，列出各分项贡献' },
+            { icon: '🔎', title: 'Beneish M-Score', desc: '8 变量盈余操纵预警模型，结合两期数据提示财务造假特征（须人工核实）' },
+            { icon: '🅰️', title: '语言合规核查', desc: '中英文语系一致性、术语规范、法定声明完整性——双语年报尤其适用' },
+          ].map((c) => (
+            <div
+              key={c.title}
+              style={{
+                backgroundColor: '#ffffff',
+                border: `1px solid ${BORDER}`,
+                borderRadius: '12px',
+                padding: '20px',
+              }}
+            >
+              <div style={{ fontSize: '22px', marginBottom: '8px' }} aria-hidden="true">{c.icon}</div>
+              <div style={{ fontSize: '15px', fontWeight: 700, color: TEXT_PRIMARY, marginBottom: '6px' }}>
+                {c.title}
+              </div>
+              <div style={{ fontSize: '12.5px', color: TEXT_MUTED, lineHeight: 1.6 }}>{c.desc}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ textAlign: 'center', marginTop: '20px' }}>
+          <Link
+            href="/methodology"
+            style={{
+              color: BRAND_LIGHT,
+              fontWeight: 600,
+              fontSize: '14px',
+              textDecoration: 'none',
+            }}
+          >
+            查看完整检测方法论与能力清单 →
+          </Link>
+        </div>
+      </section>
+
       {/* ───── 使用流程 ───── */}
       <section
         style={{
@@ -407,13 +450,7 @@ export default function HomePage() {
             四步完成专业级报告复核
           </h2>
         </div>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
-            gap: '14px',
-          }}
-        >
+        <div className="fg-grid-4" style={{ gap: '14px' }}>
           {[
             { step: '01', title: '上传报告', desc: '上传 PDF 格式财务报告' },
             { step: '02', title: '自动识别', desc: '识别报告类型、期间、准则、审计师' },
@@ -536,5 +573,3 @@ export default function HomePage() {
     </div>
   )
 }
-
-const BRAND_STRONG_BG = '#1e3a8a'
