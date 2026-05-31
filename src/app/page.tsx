@@ -1,77 +1,14 @@
 import Link from 'next/link'
+import TopNav from '@/components/TopNav'
 import {
-  NAV_BG, NAV_TEXT, NAV_MUTED, BRAND, BRAND_LIGHT, BRAND_TINT, BRAND_STRONG_BG,
+  BRAND, BRAND_LIGHT, BRAND_TINT, BRAND_STRONG_BG,
   BORDER, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
 } from '@/lib/theme'
 
 export default function HomePage() {
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f6f8fb', color: TEXT_PRIMARY }}>
-      {/* ───── 顶部深色导航 ───── */}
-      <nav
-        style={{
-          backgroundColor: NAV_BG,
-          color: NAV_TEXT,
-          padding: '14px 40px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div
-            style={{
-              width: '28px',
-              height: '28px',
-              borderRadius: '7px',
-              background: `linear-gradient(135deg, ${BRAND_LIGHT}, ${BRAND})`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'white',
-              fontWeight: 800,
-              fontSize: '14px',
-              letterSpacing: '-0.5px',
-            }}
-          >
-            FG
-          </div>
-          <div style={{ fontWeight: 700, fontSize: '17px', letterSpacing: '-0.3px' }}>
-            <span style={{ color: '#93c5fd' }}>Fin</span>
-            <span style={{ color: '#ffffff' }}>Guard</span>
-            <span
-              style={{
-                marginLeft: '10px',
-                fontSize: '12px',
-                fontWeight: 500,
-                color: NAV_MUTED,
-                letterSpacing: '0',
-              }}
-            >
-              AI 财务报告审阅平台
-            </span>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '20px', fontSize: '13px' }}>
-          <Link href="/methodology" style={{ color: NAV_MUTED, textDecoration: 'none' }}>
-            检测方法论
-          </Link>
-          <Link
-            href="/analyze"
-            style={{
-              backgroundColor: BRAND_LIGHT,
-              color: 'white',
-              padding: '7px 18px',
-              borderRadius: '6px',
-              textDecoration: 'none',
-              fontWeight: 600,
-              fontSize: '13px',
-            }}
-          >
-            进入工作台
-          </Link>
-        </div>
-      </nav>
+      <TopNav active="home" />
 
       {/* ───── Hero 区 ───── */}
       <section

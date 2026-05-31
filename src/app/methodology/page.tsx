@@ -1,6 +1,7 @@
 import Link from 'next/link'
+import TopNav from '@/components/TopNav'
 import {
-  NAV_BG, NAV_MUTED, BRAND, BRAND_LIGHT, BRAND_TINT, BORDER,
+  BRAND, BRAND_LIGHT, BRAND_TINT, BORDER,
   TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
 } from '@/lib/theme'
 
@@ -93,56 +94,7 @@ const HEALTH_DIMS = [
 export default function MethodologyPage() {
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f6f8fb', color: TEXT_PRIMARY }}>
-      {/* 顶部导航 */}
-      <nav
-        style={{
-          backgroundColor: NAV_BG,
-          padding: '14px 32px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Link href="/" style={{ textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div
-            style={{
-              width: '26px',
-              height: '26px',
-              borderRadius: '6px',
-              background: `linear-gradient(135deg, ${BRAND_LIGHT}, ${BRAND})`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'white',
-              fontWeight: 800,
-              fontSize: '12px',
-            }}
-          >
-            FG
-          </div>
-          <div style={{ fontWeight: 700, fontSize: '16px' }}>
-            <span style={{ color: '#93c5fd' }}>Fin</span>
-            <span style={{ color: '#ffffff' }}>Guard</span>
-            <span style={{ marginLeft: '8px', fontSize: '12px', fontWeight: 500, color: NAV_MUTED }}>
-              检测方法论
-            </span>
-          </div>
-        </Link>
-        <Link
-          href="/analyze"
-          style={{
-            backgroundColor: BRAND_LIGHT,
-            color: 'white',
-            padding: '7px 18px',
-            borderRadius: '6px',
-            textDecoration: 'none',
-            fontWeight: 600,
-            fontSize: '13px',
-          }}
-        >
-          进入工作台
-        </Link>
-      </nav>
+      <TopNav active="methodology" />
 
       <div style={{ maxWidth: '900px', margin: '0 auto', padding: '40px 24px 64px' }}>
         <Link href="/" style={{ color: TEXT_MUTED, textDecoration: 'none', fontSize: '13px' }}>

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { promises as fs } from 'fs'
 import path from 'path'
+import { guard } from '@/lib/apiGuard'
 
 export const dynamic = 'force-dynamic'
 
@@ -163,6 +164,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const blocked = guard(request, { limit: 8, windowMs: 60_000, name: 'feedback' })
+  if (blocked) return blocked
   try {
     const raw = (await request.json()) as FeedbackPayload
     const rating = typeof raw.rating === 'number' && raw.rating >= 1 && raw.rating <= 5 ? Math.round(raw.rating) : 0

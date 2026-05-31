@@ -1,7 +1,8 @@
 import { NextRequest } from 'next/server'
 import OpenAI from 'openai'
+import { guard } from '@/lib/apiGuard'
 
-export const maxDuration = 60 // Vercel Pro allows up to 300s, Hobby allows 60s
+export const maxDuration = 300 // Vercel Pro 上限 300s；大报告分块分析需要更长时间
 export const dynamic = 'force-dynamic'
 
 const client = new OpenAI({
@@ -375,6 +376,8 @@ function mergeReview(parts: string[]): string {
 }
 
 export async function POST(request: NextRequest) {
+  const blocked = guard(request, { limit: 15, windowMs: 60_000, name: 'analyze' })
+  if (blocked) return blocked
   try {
     const { text, mode, standard } = await request.json()
     if (!text) return new Response('缺少报告文本', { status: 400 })
@@ -438,33 +441,31 @@ ${text}`
         try {
           const want = (m: string) => mode === 'both' || mode === m
 
-          // 复核（含总览/语法）：逐块运行
-          let reviewMd = ''
-          if (want('review')) {
-            const parts: string[] = []
-            for (let i = 0; i < chunks.length; i++) {
-              const note =
-                chunks.length > 1
-                  ? `（注意：这是同一份报告的第 ${i + 1}/${chunks.length} 部分。请仅就本部分内容执行复核，并照常输出"## 报告总览 / ## 财务数据复核 / ## 语法核查"结构；总览字段如本部分无法判断填"未披露"。）\n\n`
-                  : ''
-              parts.push(
-                await complete(
-                  DATA_REVIEW_PROMPT,
-                  `${standardNote}${note}请对以下财务报告文本（部分）执行【报告总览 + 财务数据复核 + 语法核查】：\n\n${chunks[i]}`
-                )
-              )
-            }
-            reviewMd = mergeReview(parts)
-          }
+          // 复核（含总览/语法）：各分块并行运行，缩短墙钟时间，规避长报告超时
+          const reviewPromise: Promise<string> = want('review')
+            ? Promise.all(
+                chunks.map((chunk, i) => {
+                  const note =
+                    chunks.length > 1
+                      ? `（注意：这是同一份报告的第 ${i + 1}/${chunks.length} 部分。请仅就本部分内容执行复核，并照常输出"## 报告总览 / ## 财务数据复核 / ## 语法核查"结构；总览字段如本部分无法判断填"未披露"。）\n\n`
+                      : ''
+                  return complete(
+                    DATA_REVIEW_PROMPT,
+                    `${standardNote}${note}请对以下财务报告文本（部分）执行【报告总览 + 财务数据复核 + 语法核查】：\n\n${chunk}`
+                  )
+                })
+              ).then((parts) => mergeReview(parts))
+            : Promise.resolve('')
 
-          // 健康度：在首块（通常含主要报表）上运行一次
-          let healthMd = ''
-          if (want('analysis')) {
-            healthMd = await complete(
-              FINANCIAL_ANALYSIS_PROMPT,
-              `${standardNote}（注意：报告较长，以下为其主要财务报表所在的前置部分，请基于可见数据进行健康度分析，数据不足处标注 N/A。）\n\n请对以下财务报告文本执行【财务健康度分析】：\n\n${chunks[0]}`
-            )
-          }
+          // 健康度：在首块（通常含主要报表）上运行一次；与复核并行
+          const healthPromise: Promise<string> = want('analysis')
+            ? complete(
+                FINANCIAL_ANALYSIS_PROMPT,
+                `${standardNote}（注意：报告较长，以下为其主要财务报表所在的前置部分，请基于可见数据进行健康度分析，数据不足处标注 N/A。）\n\n请对以下财务报告文本执行【财务健康度分析】：\n\n${chunks[0]}`
+              )
+            : Promise.resolve('')
+
+          const [reviewMd, healthMd] = await Promise.all([reviewPromise, healthPromise])
 
           const finalMd = [reviewMd, healthMd].filter(Boolean).join('\n\n')
           controller.enqueue(encoder.encode(finalMd))

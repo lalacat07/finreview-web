@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import OpenAI from 'openai'
 import { computeRatios, type FigureInput, type RatioReport } from '@/lib/ratios'
 import { checkDisclosures } from '@/lib/disclosure'
+import { guard } from '@/lib/apiGuard'
 
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
@@ -129,6 +130,8 @@ function sampleRelevantText(text: string, budget: number): string {
 }
 
 export async function POST(request: NextRequest) {
+  const blocked = guard(request, { limit: 15, windowMs: 60_000, name: 'figures' })
+  if (blocked) return blocked
   try {
     const { text } = await request.json()
     if (!text) return Response.json({ error: '缺少报告文本' }, { status: 400 })

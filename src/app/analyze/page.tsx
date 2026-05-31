@@ -2,8 +2,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import TopNav from '@/components/TopNav'
 import {
-  NAV_BG, NAV_TEXT, BRAND, BRAND_LIGHT, BRAND_TINT, BRAND_STRONG,
+  BRAND, BRAND_LIGHT, BRAND_TINT, BRAND_STRONG,
   BORDER, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
 } from '@/lib/theme'
 
@@ -749,71 +750,6 @@ export default function AnalyzePage() {
         </div>
       )}
     </div>
-  )
-}
-
-/* ───────────────────────────────────────────────────────────────
- *  顶部导航（复用）
- * ──────────────────────────────────────────────────────────────*/
-
-function TopNav({ active }: { active?: 'home' | 'analyze' }) {
-  return (
-    <nav
-      style={{
-        backgroundColor: NAV_BG,
-        color: NAV_TEXT,
-        padding: '14px 32px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-      }}
-    >
-      <Link href="/" style={{ textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center', gap: '12px' }}>
-        <div
-          style={{
-            width: '26px',
-            height: '26px',
-            borderRadius: '6px',
-            background: `linear-gradient(135deg, ${BRAND_LIGHT}, ${BRAND})`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'white',
-            fontWeight: 800,
-            fontSize: '12px',
-          }}
-        >
-          FG
-        </div>
-        <div style={{ fontWeight: 700, fontSize: '16px' }}>
-          <span style={{ color: '#93c5fd' }}>Fin</span>
-          <span style={{ color: '#ffffff' }}>Guard</span>
-          <span style={{ marginLeft: '8px', fontSize: '12px', fontWeight: 500, color: '#94a3b8' }}>
-            AI 财务报告审阅平台
-          </span>
-        </div>
-      </Link>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '13px' }}>
-        <Link
-          href="/"
-          style={{
-            color: active === 'home' ? '#ffffff' : '#94a3b8',
-            textDecoration: 'none',
-          }}
-        >
-          产品介绍
-        </Link>
-        <Link
-          href="/analyze"
-          style={{
-            color: active === 'analyze' ? '#ffffff' : '#94a3b8',
-            textDecoration: 'none',
-          }}
-        >
-          工作台
-        </Link>
-      </div>
-    </nav>
   )
 }
 

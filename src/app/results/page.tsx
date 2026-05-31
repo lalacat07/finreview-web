@@ -599,10 +599,16 @@ function ReviewView({
   sourceText?: string
 }) {
   const [filter, setFilter] = useState<Severity>('all')
+  const [onlyOpen, setOnlyOpen] = useState(false)
 
   const filteredIssues = useMemo(
-    () => (filter === 'all' ? data.issues : data.issues.filter((i) => i.severity === filter)),
-    [data.issues, filter]
+    () =>
+      data.issues.filter(
+        (i) =>
+          (filter === 'all' || i.severity === filter) &&
+          (!onlyOpen || (statuses[i.id] || 'open') === 'open')
+      ),
+    [data.issues, filter, onlyOpen, statuses]
   )
 
   const counts = useMemo(
@@ -661,7 +667,26 @@ function ReviewView({
         subtitle={data.passed ? '本次复核未发现明显问题' : `共 ${data.issues.length} 项`}
         right={
           !data.passed && data.issues.length > 0 ? (
-            <SeverityFilter filter={filter} setFilter={setFilter} counts={counts} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setOnlyOpen((v) => !v)}
+                aria-pressed={onlyOpen}
+                className="no-print"
+                style={{
+                  border: `1.5px solid ${onlyOpen ? BRAND_LIGHT : BORDER}`,
+                  backgroundColor: onlyOpen ? BRAND_TINT : '#ffffff',
+                  color: onlyOpen ? BRAND : TEXT_SECONDARY,
+                  borderRadius: '999px',
+                  padding: '5px 12px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {onlyOpen ? '✓ 仅看未处理' : '仅看未处理'}
+              </button>
+              <SeverityFilter filter={filter} setFilter={setFilter} counts={counts} />
+            </div>
           ) : undefined
         }
       >
@@ -1466,6 +1491,22 @@ function FiguresView({
           <div style={{ fontSize: '11.5px', color: TEXT_MUTED, marginTop: '10px', lineHeight: 1.7 }}>
             {report.beneish.zoneLabel}。M-Score 为统计预警，高分仅代表具备操纵财务特征，不等于已确认造假，须结合底稿、管理层解释与外部信息核实。
           </div>
+          {report.beneish.flagged && (
+            <div
+              style={{
+                marginTop: '8px',
+                backgroundColor: RISK.med.bg,
+                border: `1px solid ${RISK.med.border}`,
+                borderRadius: '8px',
+                padding: '8px 12px',
+                fontSize: '11.5px',
+                color: RISK.med.text,
+                lineHeight: 1.7,
+              }}
+            >
+              ⚠ 注意：Beneish 模型对<strong>高速增长企业</strong>本就敏感——销售大幅增长(SGI)、资产结构变化(AQI)等会推高 M 值。若本期收入高增长，触发阈值未必意味着操纵，应优先排查增长驱动是否真实，再结合应收/存货/现金流背离等信号综合判断。
+            </div>
+          )}
         </SectionCard>
       )}
 
@@ -2115,6 +2156,51 @@ export default function ResultsPage() {
     }
   }
 
+  /* 导出 Word(.doc)：用 markdown→HTML 包成 Word 可打开的 .doc 文件 */
+  const handleExportWord = () => {
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const lines = result.split('\n')
+    const body: string[] = []
+    let inTable = false
+    for (const raw of lines) {
+      const line = raw.trimEnd()
+      const isTableRow = /^\s*\|.*\|\s*$/.test(line)
+      if (isTableRow) {
+        if (/^\s*\|[\s:|-]+\|\s*$/.test(line)) continue // 分隔行
+        const cells = line.split('|').slice(1, -1).map((c) => esc(c.trim()))
+        if (!inTable) { body.push('<table border="1" cellpadding="5" style="border-collapse:collapse">'); inTable = true }
+        body.push('<tr>' + cells.map((c) => `<td>${c}</td>`).join('') + '</tr>')
+        continue
+      }
+      if (inTable) { body.push('</table>'); inTable = false }
+      if (!line.trim()) { body.push('<br/>'); continue }
+      if (line.startsWith('#### ')) body.push(`<h4>${esc(line.slice(5))}</h4>`)
+      else if (line.startsWith('### ')) body.push(`<h3>${esc(line.slice(4))}</h3>`)
+      else if (line.startsWith('## ')) body.push(`<h2>${esc(line.slice(3))}</h2>`)
+      else if (line.startsWith('# ')) body.push(`<h1>${esc(line.slice(2))}</h1>`)
+      else if (/^\s*[-*]\s+/.test(line)) body.push(`<p style="margin:2px 0">• ${esc(line.replace(/^\s*[-*]\s+/, ''))}</p>`)
+      else body.push(`<p style="margin:4px 0">${esc(line)}</p>`)
+    }
+    if (inTable) body.push('</table>')
+    const html =
+      `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">` +
+      `<head><meta charset="utf-8"><title>FinGuard 复核结果</title></head>` +
+      `<body style="font-family:'Microsoft YaHei',sans-serif;font-size:11pt;line-height:1.6">` +
+      `<h1>FinGuard 财务报告复核结果</h1><p>报告：${esc(fileName)}</p><hr/>` +
+      body.join('\n') +
+      `</body></html>`
+    const blob = new Blob(['﻿', html], { type: 'application/msword' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const safeName = (fileName || '财务报告复核').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60)
+    a.href = url
+    a.download = `${safeName}_复核结果.doc`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   /* ─ 空结果 ─ */
   if (!result) {
     return (
@@ -2232,6 +2318,21 @@ export default function ResultsPage() {
             }}
           >
             {exporting ? '导出中…' : '导出 Excel'}
+          </button>
+          <button
+            onClick={handleExportWord}
+            style={{
+              backgroundColor: 'transparent',
+              border: `1px solid #334155`,
+              color: '#cbd5e1',
+              padding: '7px 14px',
+              borderRadius: '7px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: 600,
+            }}
+          >
+            导出 Word
           </button>
           <button
             onClick={() => window.print()}

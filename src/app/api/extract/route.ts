@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { guard } from '@/lib/apiGuard'
 
 // Use the inner lib directly to avoid pdf-parse index.js running test code
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -8,6 +9,8 @@ const pdfParse = require('pdf-parse/lib/pdf-parse.js') as (
 ) => Promise<{ text: string; numpages: number }>
 
 export async function POST(request: NextRequest) {
+  const blocked = guard(request, { limit: 20, windowMs: 60_000, name: 'extract' })
+  if (blocked) return blocked
   try {
     const formData = await request.formData()
     const file = formData.get('file') as File
