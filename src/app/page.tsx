@@ -214,7 +214,7 @@ export default function HomePage() {
                 '跨表勾稽（净利润 ↔ 现金流量表 ↔ 权益变动表）',
                 '附注表格纵横双维度核验',
                 '前后文披露口径一致性检查',
-                'EPS、ROE 等关键指标重算',
+                'EPS 重算与现金流量表逐行勾稽',
               ],
             },
             {
@@ -228,7 +228,7 @@ export default function HomePage() {
                 '偿债能力（流动比率、利息保障倍数）',
                 '现金流质量（现金收益比、自由现金流）',
                 '营运能力（DSO、存货周转、现金转换周期）',
-                '异常波动与持续经营风险（M-Score、关联方等）',
+                '异常波动与持续经营风险（商誉、现金流背离等）',
               ],
             },
           ].map((card) => (
@@ -322,18 +322,18 @@ export default function HomePage() {
       >
         <div style={{ textAlign: 'center', marginBottom: '28px' }}>
           <h2 style={{ fontSize: '22px', fontWeight: 800, color: TEXT_PRIMARY, marginBottom: '8px' }}>
-            可复核的检测，而非黑箱判断
+            事实呈现，可追溯复核
           </h2>
           <p style={{ color: TEXT_MUTED, fontSize: '14px', maxWidth: '640px', margin: '0 auto' }}>
-            关键指标由系统按公开公式独立重算并附「公式 + 代入数字」，大模型仅负责取数与文本核对。
+            只陈述可独立验证的客观差异与勾稽结果，附原文定位，判断权交给使用者——不下「造假」结论。
           </p>
         </div>
         <div className="fg-grid-4" style={{ gap: '14px' }}>
           {[
-            { icon: '🧮', title: '确定性重算引擎', desc: 'EPS、ROE、周转率等由程序按公式重算，可逐项独立复核，规避大模型心算误差' },
-            { icon: '📉', title: 'Altman Z-Score', desc: '采用 Altman 公开公式做破产 / 持续经营预警，列出各分项贡献' },
-            { icon: '🔎', title: 'Beneish M-Score', desc: '8 变量盈余操纵预警模型，结合两期数据提示财务造假特征（须人工核实）' },
+            { icon: '🔢', title: '勾稽零容忍', desc: '主表加总、平衡等式、跨表勾稽、EPS 重算逐项核验，差异附原始数字' },
+            { icon: '🔗', title: '披露一致性', desc: '附注纵横双维核验、前后文口径、占位符 / 草稿痕迹、报表线条规范' },
             { icon: '🅰️', title: '语言合规核查', desc: '中英文语系一致性、术语规范、法定声明完整性——双语年报尤其适用' },
+            { icon: '🔍', title: '原文定位 + 风险分级', desc: '每个问题附证据链与原文片段，分"明显问题"与"待管理层确认"，可追溯' },
           ].map((c) => (
             <div
               key={c.title}

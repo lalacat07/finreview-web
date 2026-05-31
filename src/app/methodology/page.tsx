@@ -42,30 +42,6 @@ const REVIEW_CAPABILITIES: Capability[] = [
     ],
   },
   {
-    title: '监管高频关注点扫描',
-    items: [
-      '控股股东 / 关联方资金占用与非经营性往来线索',
-      '违规担保、对外担保披露一致性',
-      '关联交易非关联化与港股关连交易（上市规则第 14A 章）披露',
-      '收入确认（总额 / 净额法、确认时点、可变对价）',
-      '商誉与长期资产减值充分性与时点',
-      '研发支出资本化合理性、存货 / 应收减值计提充分性',
-    ],
-  },
-  {
-    title: '集团合并与准则专项',
-    items: [
-      '合并范围变动、合并抵销完整性',
-      'VIE / 协议控制并表依据与披露',
-      '分部报告勾稽与口径一致',
-      '经调整 / Non-IFRS 指标与法定数桥接',
-      '所得税费用调节表（ETR）与递延所得税',
-      '新准则（收入 / 金融工具 / 租赁）首次执行过渡披露',
-      'CAS 特有：扣非净利润、母公司报表、现金流量表补充资料',
-      '港股特别项：强制 ESG 披露、股权高度集中、估值报告依赖、财务资助',
-    ],
-  },
-  {
     title: '语言合规核查',
     items: [
       '中英文语系一致性（英式 / 美式拼写、日期格式、标点）',
@@ -73,17 +49,6 @@ const REVIEW_CAPABILITIES: Capability[] = [
       '法定声明完整性',
     ],
   },
-]
-
-const DETERMINISTIC = [
-  '盈利能力：毛利率、净利率、ROE（杜邦分解）、ROA',
-  '偿债能力：资产负债率、流动比率、速动比率、利息保障倍数',
-  '现金流质量：现金收益比、自由现金流',
-  '营运能力：应收周转天数、存货周转天数、应付周转天数',
-  '每股指标：基本每股收益重算',
-  '成长性：营业收入、归母净利润同比（如有对比期）',
-  'Altman Z-Score 破产 / 持续经营预警（公开公式，列出分项贡献）',
-  'Beneish M-Score 盈余操纵预警（8 变量，需两期数据）',
 ]
 
 const HEALTH_DIMS = [
@@ -104,8 +69,8 @@ export default function MethodologyPage() {
           检测方法论与能力清单
         </h1>
         <p style={{ color: TEXT_SECONDARY, fontSize: '15px', lineHeight: 1.7, marginBottom: '28px' }}>
-          本页透明列出系统执行的检查维度与计算口径，便于审计、财务与披露人员评估其适用范围。
-          检测分两条主线：大模型负责<strong>结构识别、取数与文本一致性核对</strong>，确定性引擎负责<strong>按公开公式重算关键指标</strong>。
+          本页透明列出系统执行的检查维度，便于审计、财务与披露人员评估其适用范围。
+          检测围绕两个产出：<strong>数据复核与披露检查</strong>（报表勾稽、附注一致性、语言合规）与<strong>财务健康度分析</strong>（7 维度审慎评估），均以事实呈现为主、判断权交给使用者。
         </p>
 
         {/* 能力边界 */}
@@ -127,9 +92,8 @@ export default function MethodologyPage() {
             <strong>不对任何具名主体作出财务造假/舞弊的认定，也不构成审计、鉴证或证券投资建议</strong>。
             它主要核查<strong>报告内部一致性、勾稽与披露完整性</strong>，
             <strong>无法识别内部自洽的实质性造假</strong>（如全套报告口径一致但数据本身虚假）。
-            资金占用、关联交易公允性、减值充分性等需结合底稿、合同与外部信息的事项，仅作<strong>线索提示</strong>，归入「待管理层确认事项」。
-            当前指标体系面向<strong>工商业企业</strong>，<strong>不针对银行 / 保险 / 证券等金融业</strong>（其资本充足率、偿付能力等专属指标不在覆盖范围）。
-            另：当前依赖可复制文本，<strong>扫描件 / 图片型 PDF 暂不支持</strong>（会预警）。所有结论须经专业人员人工复核。
+需结合底稿、合同与外部信息才能定性的事项，仅作<strong>线索提示</strong>，归入「待管理层确认事项」。
+            另：当前依赖可复制文本，<strong>扫描件 / 图片型 PDF 暂不支持</strong>（会预警）；长报告分块解析，结论限于「已解析内容」。所有结论须经专业人员人工复核。
           </div>
         </div>
 
@@ -190,28 +154,7 @@ export default function MethodologyPage() {
           ))}
         </div>
 
-        {/* 确定性引擎 */}
-        <h2 style={{ fontSize: '20px', fontWeight: 800, marginBottom: '14px' }}>确定性重算引擎（可逐项复核）</h2>
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            border: `1px solid ${BORDER}`,
-            borderRadius: '12px',
-            padding: '18px 20px',
-            marginBottom: '32px',
-          }}
-        >
-          <p style={{ color: TEXT_SECONDARY, fontSize: '13.5px', lineHeight: 1.7, marginBottom: '10px' }}>
-            以下指标由程序按公开公式独立计算，并附「公式 + 代入数字 + 结果」，缺失或分母为零的项记为 N/A，绝不编造：
-          </p>
-          <ul style={{ margin: 0, paddingLeft: '18px', color: TEXT_SECONDARY, fontSize: '13.5px', lineHeight: 1.85 }}>
-            {DETERMINISTIC.map((it) => (
-              <li key={it}>{it}</li>
-            ))}
-          </ul>
-        </div>
-
-        <div style={{ textAlign: 'center' }}>
+        <div style={{ textAlign: 'center', marginTop: '32px' }}>
           <Link
             href="/analyze"
             style={{

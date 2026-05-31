@@ -1,15 +1,13 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { computeRatios, type RatioReport, type Metric, type FigureInput } from '@/lib/ratios'
-import { type DisclosureReport } from '@/lib/disclosure'
 import FeedbackWidget from '@/components/FeedbackWidget'
 import {
   NAV_BG, BRAND, BRAND_LIGHT, BRAND_TINT, BORDER,
   TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, TEXT_FAINT, RISK,
 } from '@/lib/theme'
 
-type Tab = 'overview' | 'review' | 'figures' | 'health'
+type Tab = 'overview' | 'review' | 'health'
 type Severity = 'all' | 'high' | 'med' | 'low'
 type Status = 'open' | 'verified' | 'fixed' | 'na'
 
@@ -1336,313 +1334,6 @@ function InlineRich({ text }: { text: string }) {
   )
 }
 
-/* ─── 指标重算 视图（确定性计算引擎） ─── */
-function FiguresView({
-  report,
-  pages,
-  disclosure,
-}: {
-  report: RatioReport
-  pages: Record<string, string>
-  disclosure?: DisclosureReport
-}) {
-  const okCount = report.groups.reduce(
-    (n, g) => n + g.metrics.filter((m) => m.status === 'ok').length,
-    0
-  )
-  const naCount = report.groups.reduce(
-    (n, g) => n + g.metrics.filter((m) => m.status === 'na').length,
-    0
-  )
-
-  return (
-    <div>
-      {/* 方法说明 */}
-      <div
-        style={{
-          backgroundColor: BRAND_TINT,
-          border: '1px solid #bfdbfe',
-          borderRadius: '12px',
-          padding: '16px 20px',
-          marginBottom: '16px',
-          fontSize: '13px',
-          color: TEXT_SECONDARY,
-          lineHeight: 1.75,
-        }}
-      >
-        <div style={{ fontWeight: 700, color: BRAND, marginBottom: '4px' }}>
-          🧮 确定性指标重算
-        </div>
-        本模块由系统按公开财务公式<strong style={{ color: TEXT_PRIMARY }}>独立重算</strong>，大模型仅负责从报告中「取数」（抽取原始科目并标注出处），所有比率均由程序计算，附「公式 + 代入数字 + 结果」，可逐项独立复核。缺失或分母为零的指标记为 N/A，不做编造。共重算 {okCount} 项指标，另有 {naCount} 项因数据不足标记为 N/A。
-      </div>
-
-      {/* Altman Z-Score */}
-      {report.altman && (
-        <SectionCard
-          title="Altman Z-Score 破产预警模型"
-          subtitle={`模型：${report.altman.model} · 阈值 危险<${report.altman.thresholds.distressBelow} / 安全>${report.altman.thresholds.safeAbove}`}
-          right={
-            <span
-              style={{
-                backgroundColor:
-                  report.altman.zone === 'distress'
-                    ? RISK.high.bg
-                    : report.altman.zone === 'grey'
-                    ? RISK.med.bg
-                    : RISK.ok.bg,
-                border: `1px solid ${
-                  report.altman.zone === 'distress'
-                    ? RISK.high.border
-                    : report.altman.zone === 'grey'
-                    ? RISK.med.border
-                    : RISK.ok.border
-                }`,
-                color:
-                  report.altman.zone === 'distress'
-                    ? RISK.high.text
-                    : report.altman.zone === 'grey'
-                    ? RISK.med.text
-                    : RISK.ok.text,
-                padding: '4px 14px',
-                borderRadius: '999px',
-                fontSize: '13px',
-                fontWeight: 700,
-              }}
-            >
-              Z = {report.altman.z.toFixed(2)} · {report.altman.zoneLabel}
-            </span>
-          }
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {report.altman.components.map((c, i) => (
-              <div
-                key={c.key}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: '12px',
-                  fontSize: '12.5px',
-                  color: TEXT_SECONDARY,
-                  lineHeight: 1.6,
-                  paddingBottom: '8px',
-                  borderBottom: i < report.altman!.components.length - 1 ? `1px solid ${BORDER}` : 'none',
-                }}
-              >
-                <span style={{ flex: 1 }}>
-                  <strong style={{ color: TEXT_PRIMARY }}>{c.key}</strong>
-                  <span style={{ color: TEXT_MUTED }}> {c.label} × {c.weight}</span>
-                </span>
-                <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                  {c.ratio.toFixed(4)} × {c.weight} = {c.contribution.toFixed(4)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      )}
-
-      {/* Beneish M-Score */}
-      {report.beneish && (
-        <SectionCard
-          title="Beneish M-Score 盈余质量统计指标"
-          subtitle={`8 变量统计模型 · 阈值 M > ${report.beneish.threshold} 为统计偏高 · 可计算变量 ${report.beneish.computedVars}/8`}
-          right={
-            <span
-              style={{
-                backgroundColor: report.beneish.flagged ? RISK.med.bg : RISK.ok.bg,
-                border: `1px solid ${report.beneish.flagged ? RISK.med.border : RISK.ok.border}`,
-                color: report.beneish.flagged ? RISK.med.text : RISK.ok.text,
-                padding: '4px 14px',
-                borderRadius: '999px',
-                fontSize: '13px',
-                fontWeight: 700,
-              }}
-            >
-              M = {report.beneish.m.toFixed(2)} · {report.beneish.flagged ? '高于阈值（统计偏高）' : '低于阈值（统计正常区间）'}
-            </span>
-          }
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {report.beneish.components.map((c, i) => (
-              <div
-                key={c.key}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: '12px',
-                  fontSize: '12.5px',
-                  color: TEXT_SECONDARY,
-                  lineHeight: 1.6,
-                  paddingBottom: '8px',
-                  borderBottom: i < report.beneish!.components.length - 1 ? `1px solid ${BORDER}` : 'none',
-                }}
-              >
-                <span style={{ flex: 1 }}>
-                  <strong style={{ color: TEXT_PRIMARY }}>{c.key}</strong>
-                  <span style={{ color: TEXT_MUTED }}> {c.label} × {c.weight}</span>
-                  {c.imputed && <span style={{ color: RISK.med.text }}> · 数据不足，中性代入</span>}
-                </span>
-                <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                  {c.value.toFixed(4)} × {c.weight} = {c.contribution.toFixed(4)}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div style={{ fontSize: '11.5px', color: TEXT_MUTED, marginTop: '10px', lineHeight: 1.7 }}>
-            {report.beneish.zoneLabel}。本卡片仅作<strong>事实与统计呈现</strong>（给出 M 值与各分项），<strong>不对任何主体作出财务造假或盈余操纵的认定</strong>，判断须由使用者结合底稿、管理层解释与外部信息自行作出。
-          </div>
-          {report.beneish.flagged && (
-            <div
-              style={{
-                marginTop: '8px',
-                backgroundColor: RISK.med.bg,
-                border: `1px solid ${RISK.med.border}`,
-                borderRadius: '8px',
-                padding: '8px 12px',
-                fontSize: '11.5px',
-                color: RISK.med.text,
-                lineHeight: 1.7,
-              }}
-            >
-              ⚠ 注意：Beneish 模型对<strong>高速增长企业</strong>本就敏感——销售大幅增长(SGI)、资产结构变化(AQI)等会推高 M 值。若本期收入高增长，触发阈值未必意味着操纵，应优先排查增长驱动是否真实，再结合应收/存货/现金流背离等信号综合判断。
-            </div>
-          )}
-        </SectionCard>
-      )}
-
-      {/* 各指标组 */}
-      {report.groups.map((g) => (
-        <SectionCard key={g.group} title={g.group} subtitle={`${g.metrics.length} 项指标`}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {g.metrics.map((m) => (
-              <MetricRow key={m.key} m={m} source={pages[m.key]} />
-            ))}
-          </div>
-        </SectionCard>
-      ))}
-
-      {/* 披露完备性清单 */}
-      {disclosure && (
-        <SectionCard
-          title="披露完备性清单"
-          subtitle={`识别准则：${disclosure.detectedStandard} · 检索到 ${disclosure.presentCount} 项 / 未检索到 ${disclosure.missingCount} 项 / 不适用 ${disclosure.naCount} 项`}
-        >
-          <div
-            style={{
-              fontSize: '12px',
-              color: TEXT_MUTED,
-              lineHeight: 1.7,
-              marginBottom: '12px',
-            }}
-          >
-            按关键词在全文确定性扫描「是否提及」强制/常见披露项。<strong style={{ color: RISK.med.text }}>「未检索到」为提示而非定论</strong>——可能确实缺失，也可能仅出现在未解析章节或用语不同，须人工核查；本清单不判断披露内容是否充分。
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {disclosure.groups.map((g) => (
-              <div key={g.group}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: TEXT_PRIMARY, marginBottom: '6px' }}>
-                  {g.group}
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                  {g.items.map((it) => {
-                    const tone =
-                      it.status === 'present' ? RISK.ok : it.status === 'missing' ? RISK.med : RISK.na
-                    const icon = it.status === 'present' ? '✓' : it.status === 'missing' ? '?' : '—'
-                    return (
-                      <span
-                        key={it.key}
-                        title={it.note}
-                        style={{
-                          backgroundColor: tone.bg,
-                          border: `1px solid ${tone.border}`,
-                          color: tone.text,
-                          borderRadius: '6px',
-                          padding: '5px 10px',
-                          fontSize: '12px',
-                          fontWeight: 600,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                        }}
-                      >
-                        <span style={{ fontWeight: 800 }}>{icon}</span>
-                        {it.label}
-                      </span>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      )}
-
-      {/* 警示 */}
-      {report.warnings.length > 0 && (
-        <SectionCard title="重算说明与数据缺口">
-          <ul style={{ margin: 0, paddingLeft: '18px', color: TEXT_MUTED, fontSize: '12.5px', lineHeight: 1.8 }}>
-            {report.warnings.map((w, i) => (
-              <li key={i}>{w}</li>
-            ))}
-          </ul>
-        </SectionCard>
-      )}
-    </div>
-  )
-}
-
-function MetricRow({ m, source }: { m: Metric; source?: string }) {
-  const na = m.status === 'na'
-  return (
-    <div
-      style={{
-        border: `1px solid ${BORDER}`,
-        borderLeft: `4px solid ${na ? RISK.na.dot : BRAND_LIGHT}`,
-        borderRadius: '10px',
-        padding: '14px 16px',
-        backgroundColor: na ? '#fafafa' : '#ffffff',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'baseline',
-          gap: '12px',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ fontSize: '14px', fontWeight: 700, color: TEXT_PRIMARY }}>{m.label}</div>
-        <div
-          style={{
-            fontSize: '18px',
-            fontWeight: 800,
-            color: na ? RISK.na.text : BRAND,
-            letterSpacing: '-0.3px',
-            fontVariantNumeric: 'tabular-nums',
-          }}
-        >
-          {m.value}
-        </div>
-      </div>
-      <div style={{ fontSize: '12px', color: TEXT_MUTED, marginTop: '6px', lineHeight: 1.7 }}>
-        <span style={{ fontWeight: 600 }}>公式：</span>
-        {m.formula}
-      </div>
-      <div style={{ fontSize: '12px', color: TEXT_SECONDARY, marginTop: '2px', lineHeight: 1.7 }}>
-        <span style={{ fontWeight: 600, color: TEXT_MUTED }}>代入：</span>
-        {m.inputs}
-      </div>
-      {m.note && (
-        <div style={{ fontSize: '11.5px', color: RISK.med.text, marginTop: '2px' }}>注：{m.note}</div>
-      )}
-      {source && (
-        <div style={{ fontSize: '11.5px', color: TEXT_FAINT, marginTop: '4px' }}>出处：{source}</div>
-      )}
-    </div>
-  )
-}
-
 /* ───────────────────────────────────────────────────────────────
  *  Legacy markdown renderer — 旧格式 fallback
  * ──────────────────────────────────────────────────────────────*/
@@ -1698,16 +1389,15 @@ const DEMO_RESULT = `## 报告总览
 
 | 项目 | 内容 |
 |------|------|
-| 报告名称 | 泡泡玛特国际集团有限公司 2025 年度业绩（演示，引用公开披露数据） |
-| 报告类型 | 年度业绩 / 年度报告 |
+| 报告名称 | 泡泡玛特国际集团有限公司 2025 年度报告（演示，引用公开年报数据） |
+| 报告类型 | 年度报告 |
 | 报告期间 | 2025 年度（截至 2025 年 12 月 31 日） |
-| 适用准则 | IFRS / HKFRS |
+| 适用准则 | IFRS（国际财务报告准则，IASB 发布） |
 | 上市地 / 代码 | 香港联交所 · 9992.HK |
-| 数据来源 | 公司公开披露的 2025 年度业绩公告（合并三大报表） |
+| 审计机构 | 罗兵咸永道会计师事务所（PricewaterhouseCoopers，注册公众利益实体核数师） |
+| 签字会计师/项目合伙人 | 由 PwC 出具无保留意见；项目合伙人(engagement partner)姓名披露于年度报告独立核数师报告（演示环境未取具体姓名） |
+| 数据来源 | 公司 2025 年度报告（经审计，含合并三大报表及附注） |
 | 报告状态 | 演示用途 |
-
-### 整体结论
-本页为产品演示。所引数据取自泡泡玛特（9992.HK）公开披露的 2025 年度业绩公告（合并损益表、合并资产负债表、合并现金流量表），仅用于展示本工具的呈现与计算方式，**不构成对该公司证券的任何评价、推荐或投资意见**。2025 年公司营业收入约人民币 371.2 亿元（同比 +184.7%），毛利率由 2024 年的 66.8% 提升至 72.1%，年内溢利约 130.1 亿元、归母净利润约 127.8 亿元（同比 +308.8%），经营活动现金流净额约 108.7 亿元。资产负债率 29.4%、流动比率约 3.48 倍，账面无银行借款，财务结构稳健。「指标重算」模块已对盈利、偿债、现金流、营运、成长等指标，以及 Altman Z-Score（安全区）、Beneish M-Score 做确定性重算（数据取自经审计的 2025 年度业绩公告；仅经营活动现金流净额因公告未附现金流量表为近似值）。以下内容均为演示，请以公司正式年报原件为准。
 
 ## 财务数据复核
 
@@ -1918,76 +1608,6 @@ function loadSheetJS(): Promise<{
   })
 }
 
-/* 演示原始科目（单位：元）——取自泡泡玛特国际集团（9992.HK）截至 2025-12-31 年度
- * 经审计业绩公告（港交所披露）的合并损益表、合并资产负债表及附注：收入/成本/毛利、销售及
- * 管理开支、财务开支、所得税、净利润、资产/负债/权益、现金、存货、应收/应付、保留盈利、
- * PP&E 净额、折旧摊销（附注5）、资本开支（资本开支表）、FY2024 对比期等均为公告原始数值。
- * 唯一例外：经营活动现金流净额——该业绩公告未附完整现金流量表，故 operatingCashFlow /
- * prevOperatingCashFlow 取与利润及营运资金变动自洽的近似口径（FY2024≈49.54 亿元有公开佐证）。
- * 注：Beneish M-Score 因 2025 年收入同比约 +185% 的高速增长会偏高（模型对高增长企业本就
- * 敏感），属模型固有特性，非异常认定——M-Score 卡片内已附此类审慎说明。 */
-const DEMO_FIGURES: FigureInput = {
-  // 合并损益表（FY2025，经审计业绩公告，单位：元）
-  revenue: 37_120_052_000,
-  grossProfit: 26_764_916_000, // 收入 − 销售成本 10,355,136 千元
-  operatingProfit: 16_890_474_000,
-  profitBeforeTax: 17_036_622_000,
-  netProfit: 13_012_042_000,
-  netProfitToParent: 12_775_689_000,
-  financeCost: 82_471_000, // 财务开支（附注），公司无银行借款，主要为租赁负债利息
-  sga: 9_852_547_000, // 销售及分销开支 8,082,433 + 一般及行政开支 1,770,114 千元
-  depreciation: 1_117_965_000, // PP&E 折旧 398,202 + 使用权资产折旧 592,713 + 无形摊销 127,050（附注5）
-  // 合并资产负债表（2025-12-31，经审计）
-  totalAssets: 32_101_354_000,
-  totalLiabilities: 9_448_987_000,
-  totalEquity: 22_652_367_000,
-  equityToParent: 22_277_735_000,
-  currentAssets: 24_914_643_000,
-  currentLiabilities: 7_168_161_000,
-  inventory: 5_472_839_000,
-  accountsReceivable: 921_240_000, // 贸易应收款项（附注12）
-  accountsPayable: 1_858_216_000, // 贸易应付款项（附注15）
-  cash: 13_775_087_000,
-  retainedEarnings: 19_153_802_000, // 保留盈利（经审计）
-  ppeNet: 1_417_556_000, // 物业、厂房及设备净额
-  // 现金流量（业绩公告未含现金流量表，OCF 为与利润及营运资金变动自洽的口径，近似）
-  operatingCashFlow: 10_865_000_000,
-  capex: 1_171_537_000, // 购买 PP&E 985,250 + 购买无形资产 186,287 千元（资本开支表）
-  // 每股（加权平均股数 = 归母净利润 ÷ 基本EPS 9.61）
-  weightedShares: 1_329_416_000,
-  // 对比期（FY2024，经审计）
-  prevRevenue: 13_037_749_000,
-  prevGrossProfit: 8_707_765_000,
-  prevNetProfit: 3_308_345_000,
-  prevNetProfitToParent: 3_125_473_000,
-  prevOperatingCashFlow: 4_954_220_000, // 约 49.54 亿元
-  prevTotalAssets: 14_870_672_000,
-  prevTotalLiabilities: 3_986_033_000,
-  prevCurrentAssets: 12_236_081_000,
-  prevAccountsReceivable: 477_723_000,
-  prevPpeNet: 739_378_000,
-  prevDepreciation: 862_823_000, // 286,481 + 452,318 + 124,024（附注5）
-  prevSga: 4_597_557_000, // 销售 3,650,464 + 管理 947,093 千元
-}
-const DEMO_PAGES: Record<string, string> = {
-  grossMargin: '2025 年度业绩公告 · 合并损益表',
-  netMargin: '2025 年度业绩公告 · 合并损益表',
-  roe: '2025 年度业绩公告 · 合并资产负债表 / 损益表',
-  roa: '2025 年度业绩公告 · 合并资产负债表 / 损益表',
-  debtRatio: '2025 年度业绩公告 · 合并资产负债表',
-  currentRatio: '2025 年度业绩公告 · 合并资产负债表',
-  quickRatio: '2025 年度业绩公告 · 合并资产负债表',
-  cashEarnings: '2025 年度业绩公告 · 合并现金流量表',
-  interestCover: '2025 年度业绩公告 · 损益表 / 财务开支附注',
-  fcf: '2025 年度业绩公告 · 资本开支表（经营现金流为近似）',
-  dso: '2025 年度业绩公告 · 资产负债表附注',
-  dio: '2025 年度业绩公告 · 资产负债表附注',
-  dpo: '2025 年度业绩公告 · 资产负债表附注',
-  eps: '2025 年度业绩公告 · 每股盈利附注',
-  revGrowth: '2025 年度业绩公告 · 损益表（含上年对比）',
-  npGrowth: '2025 年度业绩公告 · 损益表（含上年对比）',
-}
-
 /* ───────────────────────────────────────────────────────────────
  *  Page
  * ──────────────────────────────────────────────────────────────*/
@@ -1997,7 +1617,6 @@ export default function ResultsPage() {
   const [fileName, setFileName] = useState('')
   const [scope, setScope] = useState<{ pageCount: number | null; charCount: number | null; truncated: boolean } | null>(null)
   const [isDemo, setIsDemo] = useState(false)
-  const [figures, setFigures] = useState<{ ratios: RatioReport; pages: Record<string, string>; disclosure?: DisclosureReport } | null>(null)
   const [sourceText, setSourceText] = useState('')
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState<Tab>('overview')
@@ -2017,9 +1636,6 @@ export default function ResultsPage() {
         const raw = localStorage.getItem('finguard_issue_statuses_demo')
         if (raw) setStatuses(JSON.parse(raw))
       } catch {}
-      try {
-        setFigures({ ratios: computeRatios(DEMO_FIGURES), pages: DEMO_PAGES })
-      } catch {}
     } else {
       const fn = sessionStorage.getItem('fileName') || '财务报告'
       setResult(sessionStorage.getItem('analysisResult') || '')
@@ -2027,13 +1643,6 @@ export default function ResultsPage() {
       try {
         const rawScope = sessionStorage.getItem('analysisScope')
         if (rawScope) setScope(JSON.parse(rawScope))
-      } catch {}
-      try {
-        const rawFig = sessionStorage.getItem('analysisFigures')
-        if (rawFig) {
-          const f = JSON.parse(rawFig)
-          if (f && f.ratios) setFigures({ ratios: f.ratios, pages: f.pages || {}, disclosure: f.disclosure })
-        }
       } catch {}
       try {
         setSourceText(sessionStorage.getItem('analysisSourceText') || '')
@@ -2116,41 +1725,6 @@ export default function ResultsPage() {
         { wch: 44 }, { wch: 30 }, { wch: 40 }, { wch: 10 }, { wch: 12 }, { wch: 14 },
       ]
       XLSX.utils.book_append_sheet(wb, wsIssues, '问题清单')
-
-      // Sheet 2：指标重算
-      if (figures) {
-        const figRows: (string | number)[][] = [['分组', '指标', '公式', '代入数字', '结果', '状态', '出处']]
-        figures.ratios.groups.forEach((g) => {
-          g.metrics.forEach((m) => {
-            figRows.push([g.group, m.label, m.formula, m.inputs, m.value, m.status === 'na' ? '数据不足' : '已重算', figures.pages[m.key] || ''])
-          })
-        })
-        if (figures.ratios.altman) {
-          const a = figures.ratios.altman
-          figRows.push(['Altman Z-Score', `Z 值（${a.model}）`, '各分项加权求和', a.components.map((c) => `${c.key}=${c.ratio}×${c.weight}`).join('；'), `${a.z}（${a.zoneLabel}）`, '已重算', ''])
-        }
-        if (figures.ratios.beneish) {
-          const b = figures.ratios.beneish
-          figRows.push(['Beneish M-Score', `M 值（8 变量）`, '各分项加权求和 + 截距', b.components.map((c) => `${c.key}=${c.value}×${c.weight}`).join('；'), `${b.m}（${b.flagged ? '存在操纵特征' : '未见明显操纵特征'}，可计算 ${b.computedVars}/8）`, '已重算', ''])
-        }
-        const wsFig = XLSX.utils.aoa_to_sheet(figRows)
-        wsFig['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 30 }, { wch: 40 }, { wch: 18 }, { wch: 10 }, { wch: 24 }]
-        XLSX.utils.book_append_sheet(wb, wsFig, '指标重算')
-
-        // Sheet 3：披露完备性清单
-        if (figures.disclosure) {
-          const dRows: (string | number)[][] = [['分组', '披露项', '适用范围', '状态', '说明']]
-          const stLabel = (s: string) => (s === 'present' ? '检索到' : s === 'missing' ? '未检索到(需核查)' : '不适用')
-          figures.disclosure.groups.forEach((g) => {
-            g.items.forEach((it) => {
-              dRows.push([g.group, it.label, it.applicability, stLabel(it.status), it.note])
-            })
-          })
-          const wsD = XLSX.utils.aoa_to_sheet(dRows)
-          wsD['!cols'] = [{ wch: 18 }, { wch: 30 }, { wch: 14 }, { wch: 18 }, { wch: 44 }]
-          XLSX.utils.book_append_sheet(wb, wsD, '披露清单')
-        }
-      }
 
       const safeName = (fileName || '财务报告复核').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60)
       XLSX.writeFile(wb, `${safeName}_复核结果.xlsx`)
@@ -2246,7 +1820,6 @@ export default function ResultsPage() {
   const tabs: { key: Tab; label: string; available: boolean; icon: string }[] = [
     { key: 'overview', label: '报告总览', available: !!parsed.overview, icon: '📑' },
     { key: 'review', label: '财务数据复核', available: !!parsed.review, icon: '🔢' },
-    { key: 'figures', label: '指标重算', available: !!figures, icon: '🧮' },
     { key: 'health', label: '财务健康度分析', available: !!parsed.health, icon: '📊' },
   ]
 
@@ -2430,7 +2003,7 @@ export default function ResultsPage() {
             fontWeight: 600,
           }}
         >
-          📋 示例模式 — 以下为虚构演示数据，非真实分析结果
+          📋 示例报告 — 数据取自泡泡玛特公开年度报告，仅作功能演示
         </div>
       )}
 
@@ -2501,9 +2074,6 @@ export default function ResultsPage() {
             )}
           </>
         )}
-        {parsed.isNewFormat && activeTab === 'figures' && figures && (
-          <FiguresView report={figures.ratios} pages={figures.pages} disclosure={figures.disclosure} />
-        )}
         {parsed.isNewFormat && activeTab === 'health' && parsed.health && (
           <HealthView data={parsed.health} />
         )}
@@ -2511,7 +2081,6 @@ export default function ResultsPage() {
         {parsed.isNewFormat &&
           ((activeTab === 'overview' && !parsed.overview) ||
             (activeTab === 'review' && !parsed.review && !parsed.grammar) ||
-            (activeTab === 'figures' && !figures) ||
             (activeTab === 'health' && !parsed.health)) && (
             <div
               style={{
@@ -2566,12 +2135,6 @@ export default function ResultsPage() {
         {parsed.grammar && (
           <div className="print-section">
             <GrammarView data={parsed.grammar} statuses={statuses} setStatus={setIssueStatus} />
-          </div>
-        )}
-        {figures && (
-          <div className="print-section print-break">
-            <h2 style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 10px' }}>🧮 指标重算</h2>
-            <FiguresView report={figures.ratios} pages={figures.pages} disclosure={figures.disclosure} />
           </div>
         )}
         {parsed.health && (

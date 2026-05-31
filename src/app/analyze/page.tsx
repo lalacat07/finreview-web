@@ -116,15 +116,6 @@ export default function AnalyzePage() {
       const { text, pageCount, charCount, truncated, lowText } = await extractRes.json()
       if (lowText) return 'lowtext'
 
-      const figuresPromise = fetch('/api/figures', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-        signal,
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null)
-
       const analyzeRes = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -141,12 +132,6 @@ export default function AnalyzePage() {
         full += decoder.decode(value)
       }
 
-      let figuresStr = ''
-      try {
-        const figuresData = await figuresPromise
-        figuresStr = figuresData ? JSON.stringify(figuresData) : ''
-      } catch {}
-
       await saveReport({
         id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
         ts: Date.now(),
@@ -154,7 +139,7 @@ export default function AnalyzePage() {
         mode,
         standard,
         result: full,
-        figures: figuresStr,
+        figures: '',
         sourceText: String(text).slice(0, 200000),
         scope: { pageCount: pageCount ?? null, charCount: charCount ?? null, truncated: !!truncated },
       })
@@ -217,16 +202,6 @@ export default function AnalyzePage() {
           '未能从该 PDF 提取到足够的文本内容（疑似扫描件/图片版报告）。系统当前依赖可复制文本进行检查，无法识别图片中的内容，继续分析可能产生"未发现问题"的误导性结果。请改用带可复制文本的 PDF（如交易所/公司官网发布的电子版），或先对扫描件做 OCR 处理后再上传。'
         )
       }
-
-      // 并行启动确定性指标重算（取数→后端确定性计算），不阻塞主流式分析
-      const figuresPromise = fetch('/api/figures', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-        signal,
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null)
 
       // 阶段 2：识别结构（短暂展示）
       setCurrentStage('structure')
@@ -295,15 +270,6 @@ export default function AnalyzePage() {
       sessionStorage.setItem('fileName', file.name)
       sessionStorage.setItem('analysisStandard', standard)
       sessionStorage.setItem('analysisScope', JSON.stringify(scopeObj))
-      // 等待确定性指标重算结果（最多不额外阻塞太久——流式分析通常更慢）
-      let figuresStr = ''
-      try {
-        const figuresData = await figuresPromise
-        figuresStr = figuresData ? JSON.stringify(figuresData) : ''
-        sessionStorage.setItem('analysisFigures', figuresStr)
-      } catch {
-        sessionStorage.setItem('analysisFigures', '')
-      }
 
       // 本地存档到历史报告（IndexedDB，失败不阻断）
       await saveReport({
@@ -313,7 +279,7 @@ export default function AnalyzePage() {
         mode,
         standard,
         result: full,
-        figures: figuresStr,
+        figures: '',
         sourceText: sourceSlice,
         scope: scopeObj,
       })
