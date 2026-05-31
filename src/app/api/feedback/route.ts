@@ -10,6 +10,8 @@ export const dynamic = 'force-dynamic'
  *    默认 <项目根>/feedback.jsonl。适合本地 / 自部署；serverless 平台磁盘不持久。
  *  - 可选：设置 FEEDBACK_WEBHOOK_URL 后同时转发到群机器人 / Slack（best-effort）；
  *    通过 FEEDBACK_WEBHOOK_TYPE 选择载荷格式：feishu | dingtalk | wework | slack | raw。
+ *  - 可选：设置 RESEND_API_KEY + FEEDBACK_EMAIL_TO（+可选 FEEDBACK_EMAIL_FROM）后，
+ *    每条反馈通过 Resend 邮件 API 发送到指定邮箱。
  * ────────────────────────────────────────────────────────────────────────────*/
 
 interface FeedbackPayload {
@@ -64,6 +66,46 @@ async function forwardWebhook(record: Record<string, unknown>) {
     })
   } catch (e) {
     console.error('Feedback webhook forward failed:', e instanceof Error ? e.message : String(e))
+  }
+}
+
+async function forwardEmail(record: Record<string, unknown>) {
+  const apiKey = process.env.RESEND_API_KEY
+  const to = process.env.FEEDBACK_EMAIL_TO
+  if (!apiKey || !to) return
+  const from = process.env.FEEDBACK_EMAIL_FROM || 'FinGuard <onboarding@resend.dev>'
+  const stars = typeof record.rating === 'number' && record.rating > 0 ? '★'.repeat(record.rating as number) : '未评分'
+  const rows: [string, string][] = [
+    ['评分', stars],
+    ['分类', String(record.category || '未填')],
+    ['页面', String(record.page || '未知')],
+    ['内容', String(record.message || '（无）')],
+    ['联系方式', String(record.contact || '（未留）')],
+    ['时间', String(record.ts)],
+  ]
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const html =
+    `<h2>FinGuard 用户反馈</h2><table cellpadding="6" style="border-collapse:collapse">` +
+    rows.map(([k, v]) => `<tr><td style="border:1px solid #ddd;font-weight:bold">${k}</td><td style="border:1px solid #ddd;white-space:pre-wrap">${esc(v)}</td></tr>`).join('') +
+    `</table>`
+  const text = rows.map(([k, v]) => `${k}：${v}`).join('\n')
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from,
+        to: to.split(',').map((s) => s.trim()),
+        subject: `【FinGuard 反馈】${stars}${record.category ? ' · ' + record.category : ''}`,
+        html,
+        text,
+      }),
+    })
+    if (!res.ok) {
+      console.error('Feedback email failed:', res.status, await res.text().catch(() => ''))
+    }
+  } catch (e) {
+    console.error('Feedback email error:', e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -145,7 +187,7 @@ export async function POST(request: NextRequest) {
     }
 
     await appendToFile(record)
-    await forwardWebhook(record)
+    await Promise.all([forwardWebhook(record), forwardEmail(record)])
 
     return Response.json({ ok: true })
   } catch (error: unknown) {
