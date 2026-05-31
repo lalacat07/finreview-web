@@ -123,8 +123,10 @@ export default function MethodologyPage() {
         >
           <div style={{ fontWeight: 700, marginBottom: '6px' }}>⚠️ 能力边界（请务必了解）</div>
           <div>
-            本工具主要核查<strong>报告内部一致性、勾稽与披露完整性</strong>，<strong>不构成审计或鉴证</strong>，
-            也<strong>无法识别内部自洽的实质性造假</strong>（如全套报告口径一致但数据本身虚假）。
+            本工具以<strong>事实与统计呈现</strong>为主（给出勾稽差异、比率、M-Score 数值与准则口径，判断权交给使用者），
+            <strong>不对任何具名主体作出财务造假/舞弊的认定，也不构成审计、鉴证或证券投资建议</strong>。
+            它主要核查<strong>报告内部一致性、勾稽与披露完整性</strong>，
+            <strong>无法识别内部自洽的实质性造假</strong>（如全套报告口径一致但数据本身虚假）。
             资金占用、关联交易公允性、减值充分性等需结合底稿、合同与外部信息的事项，仅作<strong>线索提示</strong>，归入「待管理层确认事项」。
             当前指标体系面向<strong>工商业企业</strong>，<strong>不针对银行 / 保险 / 证券等金融业</strong>（其资本充足率、偿付能力等专属指标不在覆盖范围）。
             另：当前依赖可复制文本，<strong>扫描件 / 图片型 PDF 暂不支持</strong>（会预警）。所有结论须经专业人员人工复核。

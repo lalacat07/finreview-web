@@ -6,6 +6,7 @@ export type NavKey = 'home' | 'methodology' | 'analyze' | 'history'
 const LINKS: { key: NavKey; href: string; label: string }[] = [
   { key: 'home', href: '/', label: '产品介绍' },
   { key: 'methodology', href: '/methodology', label: '检测方法论' },
+  { key: 'history', href: '/history', label: '历史报告' },
 ]
 
 /** 全站统一顶部导航。active 指定当前页高亮，cta 控制是否显示"进入工作台"按钮。 */

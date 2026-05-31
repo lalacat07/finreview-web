@@ -8,9 +8,10 @@
  * M = -4.84 + 0.920·DSRI + 0.528·GMI + 0.404·AQI + 0.892·SGI
  *        + 0.115·DEPI - 0.172·SGAI + 4.679·TATA - 0.327·LVGI
  *
- * 判别阈值（8 变量模型）：M > -1.78 → 存在盈余操纵嫌疑（manipulator）。
- * 注意：M-Score 为统计预警，高分仅代表"具备操纵财务特征"，不等于已确认造假，
- * 须结合底稿、管理层解释与外部信息进一步核实。
+ * 判别阈值（8 变量模型）：M > -1.78 → 统计上落入"偏高"区间。
+ * 重要：本指标仅为统计/事实呈现，M 值偏高常见于高增长、会计估计或资产结构变动的企业，
+ * 不构成对任何主体"财务造假/盈余操纵"的认定或指控，须由使用者结合底稿、管理层解释
+ * 与外部信息自行判断。本模块只给出数值与阈值，不下定性结论。
  */
 
 export interface BeneishInput {
@@ -177,8 +178,8 @@ export function beneishMScore(f: BeneishInput): BeneishResult | null {
     flagged,
     threshold: THRESHOLD,
     zoneLabel: flagged
-      ? '高于阈值 -1.78：存在盈余操纵财务特征，建议结合底稿核实'
-      : '低于阈值 -1.78：未呈现明显盈余操纵特征',
+      ? '高于阈值 -1.78（统计上偏高，常见于高增长或会计估计变动企业；为关注性指标，非操纵/造假认定）'
+      : '低于阈值 -1.78（统计上未见明显异常特征）',
     components: comps.map((c) => ({ ...c, value: round(c.value), contribution: round(c.contribution) })),
     computedVars,
     warnings,

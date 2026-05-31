@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import TopNav from '@/components/TopNav'
+import { saveReport } from '@/lib/history'
 import {
   BRAND, BRAND_LIGHT, BRAND_TINT, BRAND_STRONG,
   BORDER, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
@@ -42,6 +43,7 @@ export default function AnalyzePage() {
   const [elapsed, setElapsed] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const elapsedTimer = useRef<NodeJS.Timeout | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   /* ─ 计时器 ─ */
   useEffect(() => {
@@ -56,9 +58,21 @@ export default function AnalyzePage() {
     }
   }, [stage])
 
+  /* ─ 确认弹窗：ESC 关闭 ─ */
+  useEffect(() => {
+    if (!showModal) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowModal(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showModal])
+
   /* ─ 文件处理 ─ */
   const handleFile = (f: File) => {
-    if (f.type !== 'application/pdf') {
+    // 部分系统下合法 PDF 的 MIME 为空，故以扩展名兜底
+    const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
+    if (!isPdf) {
       setError('当前仅支持 PDF 格式财务报告')
       return
     }
@@ -89,12 +103,16 @@ export default function AnalyzePage() {
     setStage('streaming')
     setCurrentStage('upload')
 
+    const controller = new AbortController()
+    abortRef.current = controller
+    const { signal } = controller
+
     try {
       // 阶段 1：上传并读取
       setCurrentStage('upload')
       const formData = new FormData()
       formData.append('file', file)
-      const extractRes = await fetch('/api/extract', { method: 'POST', body: formData })
+      const extractRes = await fetch('/api/extract', { method: 'POST', body: formData, signal })
       if (!extractRes.ok) {
         const body = await extractRes.json().catch(() => ({}))
         throw new Error(body.error || 'PDF 解析失败')
@@ -113,6 +131,7 @@ export default function AnalyzePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
+        signal,
       })
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null)
@@ -130,6 +149,7 @@ export default function AnalyzePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, mode, standard }),
+        signal,
       })
       if (!analyzeRes.ok) throw new Error('分析请求失败')
 
@@ -160,41 +180,68 @@ export default function AnalyzePage() {
         }
       }
 
+      const reportId =
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now())
+      const reportTs = Date.now()
+      const scopeObj = {
+        pageCount: pageCount ?? null,
+        charCount: charCount ?? null,
+        truncated: !!truncated,
+      }
+      const sourceSlice = String(text).slice(0, 200000)
+
       sessionStorage.setItem('analysisResult', full)
+      sessionStorage.setItem('analysisId', reportId)
+      sessionStorage.setItem('analysisTs', String(reportTs))
       // 保存原文文本以支持"原文定位"（限长以规避 sessionStorage 配额）
       try {
-        sessionStorage.setItem('analysisSourceText', String(text).slice(0, 200000))
+        sessionStorage.setItem('analysisSourceText', sourceSlice)
       } catch {
         try { sessionStorage.removeItem('analysisSourceText') } catch {}
       }
       sessionStorage.setItem('analysisMode', mode)
       sessionStorage.setItem('fileName', file.name)
       sessionStorage.setItem('analysisStandard', standard)
-      sessionStorage.setItem(
-        'analysisScope',
-        JSON.stringify({
-          pageCount: pageCount ?? null,
-          charCount: charCount ?? null,
-          truncated: !!truncated,
-        })
-      )
+      sessionStorage.setItem('analysisScope', JSON.stringify(scopeObj))
       // 等待确定性指标重算结果（最多不额外阻塞太久——流式分析通常更慢）
+      let figuresStr = ''
       try {
         const figuresData = await figuresPromise
-        sessionStorage.setItem('analysisFigures', figuresData ? JSON.stringify(figuresData) : '')
+        figuresStr = figuresData ? JSON.stringify(figuresData) : ''
+        sessionStorage.setItem('analysisFigures', figuresStr)
       } catch {
         sessionStorage.setItem('analysisFigures', '')
       }
+
+      // 本地存档到历史报告（IndexedDB，失败不阻断）
+      await saveReport({
+        id: reportId,
+        ts: reportTs,
+        fileName: file.name,
+        mode,
+        standard,
+        result: full,
+        figures: figuresStr,
+        sourceText: sourceSlice,
+        scope: scopeObj,
+      })
+
+      abortRef.current = null
       setStage('done')
       // 直接跳转到结果页（产品化体验）
       router.push('/results')
     } catch (err) {
+      // 用户主动取消（abort）不视为错误
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      if (err instanceof Error && err.name === 'AbortError') return
       setError(err instanceof Error ? err.message : '分析过程中出现错误，请重试')
       setStage('upload')
     }
   }
 
   const handleReset = () => {
+    abortRef.current?.abort()
+    abortRef.current = null
     setStage('upload')
     setStreamedText('')
     setFile(null)
@@ -532,13 +579,22 @@ export default function AnalyzePage() {
                 borderTop: `1px solid ${BORDER}`,
               }}
             >
-              <div className="fg-grid-3">
+              <div className="fg-grid-3" role="radiogroup" aria-label="会计准则">
                 {standards.map((s) => {
                   const selected = standard === s.value
                   return (
                     <div
                       key={s.value}
+                      role="radio"
+                      aria-checked={selected}
+                      tabIndex={0}
                       onClick={() => setStandard(selected ? '' : s.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          setStandard(selected ? '' : s.value)
+                        }
+                      }}
                       style={{
                         border: `1.5px solid ${selected ? BRAND_LIGHT : BORDER}`,
                         borderRadius: '8px',
@@ -580,13 +636,22 @@ export default function AnalyzePage() {
           <div style={{ fontSize: '14px', fontWeight: 700, color: TEXT_PRIMARY, marginBottom: '12px' }}>
             选择分析模式
           </div>
-          <div className="fg-grid-3">
+          <div className="fg-grid-3" role="radiogroup" aria-label="分析模式">
             {modes.map((m) => {
               const selected = mode === m.value
               return (
                 <div
                   key={m.value}
+                  role="radio"
+                  aria-checked={selected}
+                  tabIndex={0}
                   onClick={() => setMode(m.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setMode(m.value)
+                    }
+                  }}
                   style={{
                     border: `1.5px solid ${selected ? BRAND_LIGHT : BORDER}`,
                     borderRadius: '10px',
@@ -666,11 +731,21 @@ export default function AnalyzePage() {
         <p style={{ color: TEXT_MUTED, fontSize: '12px', textAlign: 'center', marginTop: '12px' }}>
           报告内容将发送至第三方大模型服务商进行分析处理 · 建议优先上传已公开报告，内部草稿请先脱敏
         </p>
+
+        <p style={{ textAlign: 'center', marginTop: '14px' }}>
+          <Link href="/results?demo=true" style={{ color: BRAND_LIGHT, fontSize: '13px', fontWeight: 600, textDecoration: 'none' }}>
+            没有报告？先看示例结果 →
+          </Link>
+        </p>
       </div>
 
       {/* 上传确认 Modal */}
       {showModal && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="上传确认"
+          onClick={() => setShowModal(false)}
           style={{
             position: 'fixed',
             inset: 0,
@@ -682,6 +757,7 @@ export default function AnalyzePage() {
           }}
         >
           <div
+            onClick={(e) => e.stopPropagation()}
             style={{
               backgroundColor: '#ffffff',
               border: `1px solid ${BORDER}`,

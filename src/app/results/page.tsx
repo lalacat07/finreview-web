@@ -1444,21 +1444,21 @@ function FiguresView({
       {/* Beneish M-Score */}
       {report.beneish && (
         <SectionCard
-          title="Beneish M-Score 盈余操纵预警模型"
-          subtitle={`8 变量模型 · 阈值 M > ${report.beneish.threshold}（高于即存在操纵特征）· 可计算变量 ${report.beneish.computedVars}/8`}
+          title="Beneish M-Score 盈余质量统计指标"
+          subtitle={`8 变量统计模型 · 阈值 M > ${report.beneish.threshold} 为统计偏高 · 可计算变量 ${report.beneish.computedVars}/8`}
           right={
             <span
               style={{
-                backgroundColor: report.beneish.flagged ? RISK.high.bg : RISK.ok.bg,
-                border: `1px solid ${report.beneish.flagged ? RISK.high.border : RISK.ok.border}`,
-                color: report.beneish.flagged ? RISK.high.text : RISK.ok.text,
+                backgroundColor: report.beneish.flagged ? RISK.med.bg : RISK.ok.bg,
+                border: `1px solid ${report.beneish.flagged ? RISK.med.border : RISK.ok.border}`,
+                color: report.beneish.flagged ? RISK.med.text : RISK.ok.text,
                 padding: '4px 14px',
                 borderRadius: '999px',
                 fontSize: '13px',
                 fontWeight: 700,
               }}
             >
-              M = {report.beneish.m.toFixed(2)} · {report.beneish.flagged ? '🔴 存在操纵特征' : '✅ 未见明显操纵特征'}
+              M = {report.beneish.m.toFixed(2)} · {report.beneish.flagged ? '高于阈值（统计偏高）' : '低于阈值（统计正常区间）'}
             </span>
           }
         >
@@ -1489,7 +1489,7 @@ function FiguresView({
             ))}
           </div>
           <div style={{ fontSize: '11.5px', color: TEXT_MUTED, marginTop: '10px', lineHeight: 1.7 }}>
-            {report.beneish.zoneLabel}。M-Score 为统计预警，高分仅代表具备操纵财务特征，不等于已确认造假，须结合底稿、管理层解释与外部信息核实。
+            {report.beneish.zoneLabel}。本卡片仅作<strong>事实与统计呈现</strong>（给出 M 值与各分项），<strong>不对任何主体作出财务造假或盈余操纵的认定</strong>，判断须由使用者结合底稿、管理层解释与外部信息自行作出。
           </div>
           {report.beneish.flagged && (
             <div
@@ -2002,6 +2002,7 @@ export default function ResultsPage() {
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState<Tab>('overview')
   const [statuses, setStatuses] = useState<Record<string, Status>>({})
+  const [meta, setMeta] = useState<{ id: string; ts: number } | null>(null)
 
   /* 挂载时从 URL / sessionStorage 读取并初始化各状态（外部数据 → React 状态的一次性同步） */
   useEffect(() => {
@@ -2036,6 +2037,11 @@ export default function ResultsPage() {
       } catch {}
       try {
         setSourceText(sessionStorage.getItem('analysisSourceText') || '')
+      } catch {}
+      try {
+        const id = sessionStorage.getItem('analysisId') || ''
+        const ts = Number(sessionStorage.getItem('analysisTs') || '')
+        if (id && Number.isFinite(ts)) setMeta({ id, ts })
       } catch {}
       try {
         const raw = localStorage.getItem(`finguard_issue_statuses_${fn}`)
@@ -2386,6 +2392,11 @@ export default function ResultsPage() {
           <span style={{ color: TEXT_MUTED, marginLeft: '4px' }}>
             · 实际解析{scope.pageCount ? ` ${scope.pageCount} 页` : ''}
             {scope.charCount ? `，约 ${(scope.charCount / 10000).toFixed(1)} 万字` : ''}
+          </span>
+        )}
+        {meta && (
+          <span style={{ color: TEXT_FAINT, marginLeft: '4px', fontSize: '12px' }}>
+            · 报告编号 {meta.id.slice(0, 8)} · {new Date(meta.ts).toLocaleString('zh-CN')}
           </span>
         )}
       </div>
