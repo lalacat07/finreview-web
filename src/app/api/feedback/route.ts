@@ -78,6 +78,48 @@ async function appendToFile(record: Record<string, unknown>) {
   }
 }
 
+/* 查看反馈：需 FEEDBACK_ADMIN_TOKEN 校验（未配置则拒绝，避免公开暴露）。
+ * 用法：GET /api/feedback?token=xxx 或带请求头 x-admin-token。 */
+export async function GET(request: NextRequest) {
+  const adminToken = process.env.FEEDBACK_ADMIN_TOKEN
+  if (!adminToken) {
+    return Response.json(
+      { ok: false, error: '未配置 FEEDBACK_ADMIN_TOKEN，反馈查看接口已禁用' },
+      { status: 403 }
+    )
+  }
+  const url = new URL(request.url)
+  const token = url.searchParams.get('token') || request.headers.get('x-admin-token') || ''
+  if (token !== adminToken) {
+    return Response.json({ ok: false, error: '令牌无效' }, { status: 401 })
+  }
+
+  const file = process.env.FEEDBACK_FILE || path.join(process.cwd(), 'feedback.jsonl')
+  try {
+    const raw = await fs.readFile(file, 'utf8')
+    const items = raw
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => {
+        try {
+          return JSON.parse(l)
+        } catch {
+          return null
+        }
+      })
+      .filter(Boolean)
+      .reverse() // 最新在前
+    return Response.json({ ok: true, count: items.length, items })
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException
+    if (err && err.code === 'ENOENT') {
+      return Response.json({ ok: true, count: 0, items: [], note: '暂无反馈文件（还没有人提交，或部署在不持久化文件系统上）' })
+    }
+    return Response.json({ ok: false, error: '读取反馈失败' }, { status: 500 })
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const raw = (await request.json()) as FeedbackPayload
