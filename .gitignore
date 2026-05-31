@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 用户反馈本地存储（勿提交）
+feedback.jsonl
+/feedback/

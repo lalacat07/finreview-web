@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { computeRatios, type RatioReport, type Metric, type FigureInput } from '@/lib/ratios'
 import { type DisclosureReport } from '@/lib/disclosure'
+import FeedbackWidget from '@/components/FeedbackWidget'
 import {
   NAV_BG, BRAND, BRAND_LIGHT, BRAND_TINT, BORDER,
   TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, TEXT_FAINT, RISK,
@@ -2393,6 +2394,15 @@ export default function ResultsPage() {
               本次分析未生成此模块内容
             </div>
           )}
+
+        {/* 本次检测反馈 */}
+        <div style={{ marginTop: '28px' }}>
+          <FeedbackWidget
+            variant="inline"
+            page={isDemo ? 'results(demo)' : 'results'}
+            title="这次的检测结果准不准？给我们提个意见"
+          />
+        </div>
       </div>
 
       {/* 打印 / PDF 全量报告（屏幕隐藏，打印时展开所有模块） */}
