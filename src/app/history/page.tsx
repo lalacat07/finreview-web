@@ -19,12 +19,21 @@ const MODE_LABEL: Record<string, string> = {
 export default function HistoryPage() {
   const router = useRouter()
   const [items, setItems] = useState<HistoryRecord[] | null>(null)
+  const [batchSummary, setBatchSummary] = useState<string[] | null>(null)
 
   const refresh = () => {
     listReports().then(setItems)
   }
   useEffect(() => {
     refresh()
+    try {
+      const raw = sessionStorage.getItem('batchSummary')
+      if (raw) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setBatchSummary(JSON.parse(raw))
+        sessionStorage.removeItem('batchSummary')
+      }
+    } catch {}
   }, [])
 
   const open = (rec: HistoryRecord) => {
@@ -56,6 +65,26 @@ export default function HistoryPage() {
         <p style={{ color: TEXT_SECONDARY, fontSize: '13.5px', lineHeight: 1.7, marginBottom: '20px' }}>
           历次复核结果保存在<strong>本浏览器本地</strong>（IndexedDB，不上传服务器）。清除浏览器数据会一并删除；换设备 / 浏览器不可见。
         </p>
+
+        {batchSummary && (
+          <div
+            style={{
+              backgroundColor: BRAND_TINT,
+              border: `1px solid ${BORDER}`,
+              borderRadius: '12px',
+              padding: '14px 18px',
+              marginBottom: '16px',
+              fontSize: '13px',
+              color: TEXT_SECONDARY,
+              lineHeight: 1.8,
+            }}
+          >
+            <div style={{ fontWeight: 700, color: BRAND, marginBottom: '4px' }}>批量处理完成</div>
+            {batchSummary.map((s, i) => (
+              <div key={i}>· {s}</div>
+            ))}
+          </div>
+        )}
 
         {items === null && (
           <div style={{ color: TEXT_MUTED, fontSize: '14px', padding: '40px', textAlign: 'center' }}>加载中…</div>

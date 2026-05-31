@@ -30,7 +30,9 @@ type StageKey = (typeof STAGES)[number]['key']
 
 export default function AnalyzePage() {
   const router = useRouter()
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
+  const file = files[0] ?? null
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; name: string } | null>(null)
   const [mode, setMode] = useState<Mode>('both')
   const [standard, setStandard] = useState<Standard>('') // 默认空 = 让系统自动识别
   const [showStandard, setShowStandard] = useState(false) // 高级：手动覆盖
@@ -68,26 +70,35 @@ export default function AnalyzePage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [showModal])
 
-  /* ─ 文件处理 ─ */
-  const handleFile = (f: File) => {
-    // 部分系统下合法 PDF 的 MIME 为空，故以扩展名兜底
-    const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
-    if (!isPdf) {
-      setError('当前仅支持 PDF 格式财务报告')
-      return
+  /* ─ 文件处理（支持多选/批量） ─ */
+  const handleFiles = (list: FileList | File[]) => {
+    const arr = Array.from(list)
+    const valid: File[] = []
+    let skipped = ''
+    for (const f of arr) {
+      // 部分系统下合法 PDF 的 MIME 为空，故以扩展名兜底
+      const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
+      if (!isPdf) { skipped = `「${f.name}」非 PDF，已跳过`; continue }
+      if (f.size > 50 * 1024 * 1024) { skipped = `「${f.name}」超过 50MB，已跳过`; continue }
+      valid.push(f)
     }
-    if (f.size > 50 * 1024 * 1024) {
-      setError('文件超出 50MB 限制，请压缩或拆分后再上传')
-      return
+    setError(skipped)
+    if (valid.length) {
+      setFiles((prev) => {
+        const seen = new Set(prev.map((p) => p.name + p.size))
+        const merged = [...prev]
+        for (const f of valid) if (!seen.has(f.name + f.size)) merged.push(f)
+        return merged
+      })
     }
-    setError('')
-    setFile(f)
   }
+
+  const removeFileAt = (i: number) => setFiles((prev) => prev.filter((_, idx) => idx !== i))
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setDragOver(false)
-    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0])
+    if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files)
   }
 
   const handleAnalyzeClick = () => {
@@ -95,9 +106,68 @@ export default function AnalyzePage() {
     setShowModal(true)
   }
 
+  /** 处理单份文件（不跳转，仅存档到历史）。用于批量模式。返回 'ok' | 'lowtext' | 'error' */
+  const processOneFile = async (f: File, signal: AbortSignal): Promise<'ok' | 'lowtext' | 'error'> => {
+    try {
+      const formData = new FormData()
+      formData.append('file', f)
+      const extractRes = await fetch('/api/extract', { method: 'POST', body: formData, signal })
+      if (!extractRes.ok) return 'error'
+      const { text, pageCount, charCount, truncated, lowText } = await extractRes.json()
+      if (lowText) return 'lowtext'
+
+      const figuresPromise = fetch('/api/figures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+        signal,
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+
+      const analyzeRes = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, mode, standard }),
+        signal,
+      })
+      if (!analyzeRes.ok) return 'error'
+      const reader = analyzeRes.body!.getReader()
+      const decoder = new TextDecoder()
+      let full = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        full += decoder.decode(value)
+      }
+
+      let figuresStr = ''
+      try {
+        const figuresData = await figuresPromise
+        figuresStr = figuresData ? JSON.stringify(figuresData) : ''
+      } catch {}
+
+      await saveReport({
+        id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
+        ts: Date.now(),
+        fileName: f.name,
+        mode,
+        standard,
+        result: full,
+        figures: figuresStr,
+        sourceText: String(text).slice(0, 200000),
+        scope: { pageCount: pageCount ?? null, charCount: charCount ?? null, truncated: !!truncated },
+      })
+      return 'ok'
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') throw e
+      return 'error'
+    }
+  }
+
   const handleConfirm = async () => {
     setShowModal(false)
-    if (!file) return
+    if (files.length === 0) return
     setError('')
     setStreamedText('')
     setStage('streaming')
@@ -106,6 +176,28 @@ export default function AnalyzePage() {
     const controller = new AbortController()
     abortRef.current = controller
     const { signal } = controller
+
+    // 批量模式：逐份处理并存档，完成后跳历史页
+    if (files.length > 1) {
+      try {
+        const results: string[] = []
+        for (let i = 0; i < files.length; i++) {
+          setBatchProgress({ current: i + 1, total: files.length, name: files[i].name })
+          const r = await processOneFile(files[i], signal)
+          results.push(`${files[i].name}：${r === 'ok' ? '完成' : r === 'lowtext' ? '跳过（疑似扫描件/图片版，无可提取文本）' : '失败'}`)
+        }
+        abortRef.current = null
+        sessionStorage.setItem('batchSummary', JSON.stringify(results))
+        setStage('done')
+        router.push('/history')
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        setError(err instanceof Error ? err.message : '批量处理出错')
+        setStage('upload')
+        setBatchProgress(null)
+      }
+      return
+    }
 
     try {
       // 阶段 1：上传并读取
@@ -244,7 +336,8 @@ export default function AnalyzePage() {
     abortRef.current = null
     setStage('upload')
     setStreamedText('')
-    setFile(null)
+    setFiles([])
+    setBatchProgress(null)
     setError('')
     setElapsed(0)
   }
@@ -266,6 +359,56 @@ export default function AnalyzePage() {
    *  采用阶段进度 + 当前任务卡片 + 扫描动画，让用户清晰感受系统正在工作
    *  done 状态也保留此页面，避免跳转到结果页前闪回上传页
    * ──────────────────────────────────────────────────────────────*/
+  /* 批量处理视图 */
+  if ((stage === 'streaming' || stage === 'done') && batchProgress) {
+    const pct = Math.round((batchProgress.current / batchProgress.total) * 100)
+    return (
+      <div style={{ minHeight: '100vh', backgroundColor: '#f6f8fb', color: TEXT_PRIMARY }}>
+        <TopNav active="analyze" />
+        <div style={{ maxWidth: '760px', margin: '0 auto', padding: '40px 24px 64px' }}>
+          <div style={{ fontSize: '20px', fontWeight: 800, marginBottom: '6px' }}>正在批量检查</div>
+          <div style={{ fontSize: '13px', color: TEXT_MUTED, marginBottom: '20px' }}>
+            第 {batchProgress.current} / {batchProgress.total} 份 · 当前：{batchProgress.name}
+          </div>
+          <div
+            style={{
+              backgroundColor: '#fff',
+              border: `1px solid ${BORDER}`,
+              borderRadius: '14px',
+              padding: '28px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px', fontSize: '13px' }}>
+              <span style={{ fontWeight: 600, color: TEXT_SECONDARY }}>整体进度</span>
+              <span style={{ fontWeight: 700, color: BRAND }}>{pct}%</span>
+            </div>
+            <div style={{ height: '8px', backgroundColor: '#f1f5f9', borderRadius: '999px', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${pct}%`, background: `linear-gradient(90deg, ${BRAND_LIGHT}, ${BRAND})`, transition: 'width 0.4s ease' }} />
+            </div>
+            <div style={{ fontSize: '12px', color: TEXT_MUTED, marginTop: '16px', lineHeight: 1.7 }}>
+              逐份处理中，完成后将自动跳转到「历史报告」，可逐一查看结果。请勿关闭页面。
+            </div>
+            <button
+              onClick={handleReset}
+              style={{
+                marginTop: '18px',
+                backgroundColor: '#fff',
+                border: `1px solid ${BORDER}`,
+                color: TEXT_SECONDARY,
+                padding: '8px 16px',
+                borderRadius: '7px',
+                cursor: 'pointer',
+                fontSize: '13px',
+              }}
+            >
+              取消批量
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (stage === 'streaming' || stage === 'done') {
     const stageIdx = STAGES.findIndex((s) => s.key === currentStage)
     const progressPct = Math.round(((stageIdx + 1) / STAGES.length) * 100)
@@ -474,22 +617,25 @@ export default function AnalyzePage() {
               ref={fileInputRef}
               type="file"
               accept=".pdf"
+              multiple
               style={{ display: 'none' }}
-              onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+              onChange={(e) => e.target.files?.length && handleFiles(e.target.files)}
             />
-            {file ? (
+            {files.length > 0 ? (
               <div>
                 <div style={{ fontSize: '32px', marginBottom: '6px' }}>✅</div>
-                <div style={{ fontWeight: 700, color: '#047857', fontSize: '15px' }}>{file.name}</div>
+                <div style={{ fontWeight: 700, color: '#047857', fontSize: '15px' }}>
+                  {files.length === 1 ? files[0].name : `已选 ${files.length} 个文件，将批量逐份检查`}
+                </div>
                 <div style={{ color: TEXT_MUTED, fontSize: '13px', marginTop: '4px' }}>
-                  {(file.size / 1024 / 1024).toFixed(2)} MB · 点击重新选择
+                  点击可继续添加；下方可逐项移除
                 </div>
               </div>
             ) : (
               <div>
                 <div style={{ fontSize: '36px', marginBottom: '8px' }}>📄</div>
                 <div style={{ fontWeight: 700, fontSize: '15px', color: TEXT_PRIMARY, marginBottom: '6px' }}>
-                  拖拽 PDF 至此，或点击选择文件
+                  拖拽 PDF 至此，或点击选择文件（支持多选批量）
                 </div>
                 <div style={{ color: TEXT_MUTED, fontSize: '13px' }}>
                   当前仅支持上传 PDF 格式财务报告，单个文件最大 50MB
@@ -497,6 +643,39 @@ export default function AnalyzePage() {
               </div>
             )}
           </div>
+
+          {/* 已选文件列表 */}
+          {files.length > 0 && (
+            <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {files.map((f, i) => (
+                <div
+                  key={f.name + f.size + i}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: '8px',
+                    padding: '8px 12px',
+                    fontSize: '13px',
+                  }}
+                >
+                  <span style={{ color: TEXT_SECONDARY, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {i + 1}. {f.name}
+                    <span style={{ color: TEXT_MUTED }}> · {(f.size / 1024 / 1024).toFixed(2)} MB</span>
+                  </span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); removeFileAt(i) }}
+                    aria-label={`移除 ${f.name}`}
+                    style={{ background: 'none', border: 'none', color: TEXT_MUTED, cursor: 'pointer', fontSize: '16px', lineHeight: 1, flexShrink: 0 }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div
             style={{
@@ -710,22 +889,22 @@ export default function AnalyzePage() {
 
         <button
           onClick={handleAnalyzeClick}
-          disabled={!file}
+          disabled={files.length === 0}
           style={{
             width: '100%',
             padding: '14px',
-            backgroundColor: file ? BRAND_LIGHT : '#cbd5e1',
-            color: file ? 'white' : '#64748b',
+            backgroundColor: files.length ? BRAND_LIGHT : '#cbd5e1',
+            color: files.length ? 'white' : '#64748b',
             border: 'none',
             borderRadius: '10px',
             fontSize: '15px',
             fontWeight: 700,
-            cursor: file ? 'pointer' : 'not-allowed',
+            cursor: files.length ? 'pointer' : 'not-allowed',
             transition: 'background-color 0.2s',
-            boxShadow: file ? '0 6px 18px rgba(37, 99, 235, 0.25)' : 'none',
+            boxShadow: files.length ? '0 6px 18px rgba(37, 99, 235, 0.25)' : 'none',
           }}
         >
-          开始智能检查
+          {files.length > 1 ? `开始批量检查（${files.length} 份）` : '开始智能检查'}
         </button>
 
         <p style={{ color: TEXT_MUTED, fontSize: '12px', textAlign: 'center', marginTop: '12px' }}>
