@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import OpenAI from 'openai'
+import Anthropic from '@anthropic-ai/sdk'
 import { guard } from '@/lib/apiGuard'
 
 export const maxDuration = 300 // Vercel Pro 上限 300s；大报告分块分析需要更长时间
@@ -13,6 +14,20 @@ const client = new OpenAI({
 })
 
 const MODEL = process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : 'doubao-1-5-pro-32k-250115'
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Claude 视觉路径（原生读取 PDF）
+ *  当配置 ANTHROPIC_API_KEY 且可直接传入 PDF 时，使用 Claude 的 document 块
+ *  让模型逐页"看"版面：既能识别扫描件/图片型 PDF，又能保留表格行列结构，
+ *  显著提升横纵向勾稽与格式（跨页表格、千分位、零金额"-"等）的检出能力。
+ * ────────────────────────────────────────────────────────────────────────────*/
+const anthropic = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null
+const VISION_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6'
+// Claude 单次请求 PDF 限制：≤100 页且 ≤32MB；超出则回退到纯文本路径
+const VISION_MAX_PAGES = 100
+const VISION_MAX_BYTES = 30 * 1024 * 1024
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * SYSTEM ROLE
@@ -361,16 +376,116 @@ function mergeReview(parts: string[]): string {
   return [overview, dataHead + dataBody, grammarHead + grammarBody].filter(Boolean).join('\n\n')
 }
 
+/** 按模式选择 system prompt */
+function systemFor(mode: string): string {
+  if (mode === 'review') return DATA_REVIEW_PROMPT
+  if (mode === 'analysis') return FINANCIAL_ANALYSIS_PROMPT
+  return `${DATA_REVIEW_PROMPT}\n\n---\n\n${FINANCIAL_ANALYSIS_PROMPT}`
+}
+
+/** 视觉路径（PDF 作为文档传入）下的用户指令 */
+function visionInstruction(mode: string, standardNote: string): string {
+  if (mode === 'review')
+    return `${standardNote}请对随附 PDF 财务报告执行【报告总览 + 财务数据复核 + 语法核查】。务必逐页审阅全部主表（合并及母公司单体）与全部附注，并直接基于版面核验表格的横向/纵向加总、跨页表格、千分位、零金额是否以"-"列示等。`
+  if (mode === 'analysis')
+    return `${standardNote}请对随附 PDF 财务报告执行【财务健康度分析】。`
+  return `${standardNote}请对随附 PDF 财务报告同时输出以下四大模块（顺序严格）：
+1. ## 报告总览
+2. ## 财务数据复核
+3. ## 语法核查
+4. ## 财务健康度分析
+
+务必逐页审阅全部主表（合并及母公司单体）与全部附注，并直接基于版面核验表格的横向/纵向加总、跨页表格、千分位、零金额是否以"-"列示等格式细节。`
+}
+
+/** Claude 视觉路径：把 PDF 作为 document 块直接交给模型逐页审阅，流式返回 */
+function visionStream(base64: string, mode: string, standardNote: string): ReadableStream {
+  const encoder = new TextEncoder()
+  return new ReadableStream({
+    async start(controller) {
+      try {
+        const stream = await anthropic!.messages.create({
+          model: VISION_MODEL,
+          max_tokens: mode === 'analysis' ? 8192 : 16000,
+          system: systemFor(mode),
+          stream: true,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'document',
+                  source: { type: 'base64', media_type: 'application/pdf', data: base64 },
+                },
+                { type: 'text', text: visionInstruction(mode, standardNote) },
+              ],
+            },
+          ],
+        })
+        for await (const event of stream) {
+          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            controller.enqueue(encoder.encode(event.delta.text))
+          }
+        }
+        controller.close()
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        controller.enqueue(encoder.encode(`分析失败（视觉路径）：${msg}`))
+        controller.close()
+      }
+    },
+  })
+}
+
 export async function POST(request: NextRequest) {
   const blocked = guard(request, { limit: 15, windowMs: 60_000, name: 'analyze' })
   if (blocked) return blocked
   try {
-    const { text, mode, standard } = await request.json()
-    if (!text) return new Response('缺少报告文本', { status: 400 })
+    const ct = request.headers.get('content-type') || ''
+    let text = ''
+    let mode = 'both'
+    let standard = ''
+    let pdfBase64 = ''
+    let pdfBytes = 0
+    let pageCount = 0
+
+    if (ct.includes('multipart/form-data')) {
+      const form = await request.formData()
+      text = (form.get('text') as string) || ''
+      mode = (form.get('mode') as string) || 'both'
+      standard = (form.get('standard') as string) || ''
+      pageCount = Number(form.get('pageCount') || 0)
+      const file = form.get('file')
+      if (file && typeof file !== 'string') {
+        const buf = Buffer.from(await (file as File).arrayBuffer())
+        pdfBytes = buf.length
+        pdfBase64 = buf.toString('base64')
+      }
+    } else {
+      const body = await request.json()
+      text = body.text || ''
+      mode = body.mode || 'both'
+      standard = body.standard || ''
+    }
 
     const standardNote = standard
       ? `用户指定的会计准则（如系统识别不同，请以本字段为准并在报告总览中注明）：${standard}\n\n`
       : '系统将自动识别报告适用准则。\n\n'
+
+    /* ── 视觉路径优先：配置 Anthropic 且 PDF 在限制内时，让 Claude 原生读 PDF ── */
+    const visionOK =
+      !!anthropic &&
+      !!pdfBase64 &&
+      pdfBytes <= VISION_MAX_BYTES &&
+      (pageCount === 0 || pageCount <= VISION_MAX_PAGES)
+    if (visionOK) {
+      return new Response(visionStream(pdfBase64, mode, standardNote), {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      })
+    }
+
+    /* ── 回退：纯文本路径（无 Anthropic key、PDF 过大/过长，或仅传入文本） ── */
+    if (!text) return new Response('缺少报告文本', { status: 400 })
 
     const chunks = chunkText(text, CHAR_BUDGET)
     const encoder = new TextEncoder()

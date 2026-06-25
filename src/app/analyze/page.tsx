@@ -106,22 +106,24 @@ export default function AnalyzePage() {
     setShowModal(true)
   }
 
-  /** 处理单份文件（不跳转，仅存档到历史）。用于批量模式。返回 'ok' | 'lowtext' | 'error' */
-  const processOneFile = async (f: File, signal: AbortSignal): Promise<'ok' | 'lowtext' | 'error'> => {
+  /** 处理单份文件（不跳转，仅存档到历史）。用于批量模式。返回 'ok' | 'error' */
+  const processOneFile = async (f: File, signal: AbortSignal): Promise<'ok' | 'error'> => {
     try {
       const formData = new FormData()
       formData.append('file', f)
       const extractRes = await fetch('/api/extract', { method: 'POST', body: formData, signal })
       if (!extractRes.ok) return 'error'
-      const { text, pageCount, charCount, truncated, lowText } = await extractRes.json()
-      if (lowText) return 'lowtext'
+      const { text, pageCount, charCount, truncated } = await extractRes.json()
 
-      const analyzeRes = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, mode, standard }),
-        signal,
-      })
+      // 优先把 PDF 原件交给后端视觉路径（Claude 原生读 PDF，支持扫描件并保留表格版面）；
+      // 同时附上抽取文本，后端在无视觉能力或 PDF 过大时自动回退到文本路径。
+      const analyzeForm = new FormData()
+      analyzeForm.append('file', f)
+      analyzeForm.append('text', text || '')
+      analyzeForm.append('mode', mode)
+      analyzeForm.append('standard', standard)
+      analyzeForm.append('pageCount', String(pageCount ?? ''))
+      const analyzeRes = await fetch('/api/analyze', { method: 'POST', body: analyzeForm, signal })
       if (!analyzeRes.ok) return 'error'
       const reader = analyzeRes.body!.getReader()
       const decoder = new TextDecoder()
@@ -169,7 +171,7 @@ export default function AnalyzePage() {
         for (let i = 0; i < files.length; i++) {
           setBatchProgress({ current: i + 1, total: files.length, name: files[i].name })
           const r = await processOneFile(files[i], signal)
-          results.push(`${files[i].name}：${r === 'ok' ? '完成' : r === 'lowtext' ? '跳过（疑似扫描件/图片版，无可提取文本）' : '失败'}`)
+          results.push(`${files[i].name}：${r === 'ok' ? '完成' : '失败'}`)
         }
         abortRef.current = null
         sessionStorage.setItem('batchSummary', JSON.stringify(results))
@@ -194,14 +196,7 @@ export default function AnalyzePage() {
         const body = await extractRes.json().catch(() => ({}))
         throw new Error(body.error || 'PDF 解析失败')
       }
-      const { text, pageCount, charCount, truncated, lowText } = await extractRes.json()
-
-      // 图片型/扫描型 PDF：抽不到正文，继续分析只会得到"未发现问题"的假阴性，需中止并提示
-      if (lowText) {
-        throw new Error(
-          '未能从该 PDF 提取到足够的文本内容（疑似扫描件/图片版报告）。系统当前依赖可复制文本进行检查，无法识别图片中的内容，继续分析可能产生"未发现问题"的误导性结果。请改用带可复制文本的 PDF（如交易所/公司官网发布的电子版），或先对扫描件做 OCR 处理后再上传。'
-        )
-      }
+      const { text, pageCount, charCount, truncated } = await extractRes.json()
 
       // 阶段 2：识别结构（短暂展示）
       setCurrentStage('structure')
@@ -211,13 +206,16 @@ export default function AnalyzePage() {
       setCurrentStage('extract')
       await sleep(450)
 
-      // 启动流式分析
-      const analyzeRes = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, mode, standard }),
-        signal,
-      })
+      // 启动流式分析：优先把 PDF 原件交给后端视觉路径（Claude 原生读 PDF，
+      // 可识别扫描件/图片型报告并保留表格版面），并附带抽取文本供后端在无视觉
+      // 能力或 PDF 过大时回退到文本路径。
+      const analyzeForm = new FormData()
+      analyzeForm.append('file', file)
+      analyzeForm.append('text', text || '')
+      analyzeForm.append('mode', mode)
+      analyzeForm.append('standard', standard)
+      analyzeForm.append('pageCount', String(pageCount ?? ''))
+      const analyzeRes = await fetch('/api/analyze', { method: 'POST', body: analyzeForm, signal })
       if (!analyzeRes.ok) throw new Error('分析请求失败')
 
       // 阶段 4–6 随流式输出推进
@@ -931,7 +929,7 @@ export default function AnalyzePage() {
               上传确认
             </h2>
             <p style={{ color: TEXT_SECONDARY, fontSize: '13.5px', lineHeight: 1.7, marginBottom: '24px' }}>
-              请确认您有权上传此文件，并已了解：为完成分析，报告内容将通过网络发送至第三方大模型服务商（DeepSeek / 火山方舟等）进行处理。我们不会主动留存您的报告，但无法对第三方服务商的数据处理作出担保。请勿上传涉密或未公开的敏感报告，内部草稿请先脱敏。
+              请确认您有权上传此文件，并已了解：为完成分析，报告内容（含 PDF 原件）将通过网络发送至第三方大模型服务商（Anthropic Claude / DeepSeek / 火山方舟等）进行处理。我们不会主动留存您的报告，但无法对第三方服务商的数据处理作出担保。请勿上传涉密或未公开的敏感报告，内部草稿请先脱敏。
             </p>
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
