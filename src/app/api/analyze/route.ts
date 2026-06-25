@@ -7,8 +7,11 @@ import { renderPdfToImages } from '@/lib/pdfRender'
 export const maxDuration = 300 // Vercel Pro 上限 300s；大报告分块分析需要更长时间
 export const dynamic = 'force-dynamic'
 
+/** 清洗 API key：去掉换行/空格等空白字符（防止环境变量误带换行导致 Header 非法） */
+const cleanKey = (k?: string) => (k || '').replace(/\s/g, '')
+
 const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY || process.env.ARK_API_KEY,
+  apiKey: cleanKey(process.env.DEEPSEEK_API_KEY || process.env.ARK_API_KEY),
   baseURL: process.env.DEEPSEEK_API_KEY
     ? 'https://api.deepseek.com'
     : 'https://ark.cn-beijing.volces.com/api/v3',
@@ -23,7 +26,7 @@ const MODEL = process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : 'doubao-1-5-pro-3
  *  显著提升横纵向勾稽与格式（跨页表格、千分位、零金额"-"等）的检出能力。
  * ────────────────────────────────────────────────────────────────────────────*/
 const anthropic = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  ? new Anthropic({ apiKey: cleanKey(process.env.ANTHROPIC_API_KEY) })
   : null
 const VISION_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6'
 // Claude 单次请求 PDF 限制：≤100 页且 ≤32MB；超出则回退到纯文本路径
@@ -37,7 +40,7 @@ const VISION_MAX_BYTES = 30 * 1024 * 1024
  * ────────────────────────────────────────────────────────────────────────────*/
 const glm = process.env.ZHIPUAI_API_KEY
   ? new OpenAI({
-      apiKey: process.env.ZHIPUAI_API_KEY,
+      apiKey: cleanKey(process.env.ZHIPUAI_API_KEY),
       baseURL: 'https://open.bigmodel.cn/api/paas/v4',
     })
   : null
@@ -52,7 +55,7 @@ const GLM_PAGES_PER_CALL = Number(process.env.GLM_PAGES_PER_CALL || 8) // 单次
 const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL || 'https://api.moonshot.cn/v1'
 const MOONSHOT_MODEL = process.env.MOONSHOT_MODEL || 'kimi-k2.5'
 const moonshot = process.env.MOONSHOT_API_KEY
-  ? new OpenAI({ apiKey: process.env.MOONSHOT_API_KEY, baseURL: MOONSHOT_BASE_URL })
+  ? new OpenAI({ apiKey: cleanKey(process.env.MOONSHOT_API_KEY), baseURL: MOONSHOT_BASE_URL })
   : null
 
 // 视觉引擎显式选择：'kimi' | 'glm' | 'claude'（留空=自动：Kimi > GLM > Claude）
@@ -546,7 +549,7 @@ function glmVisionStream(buf: Buffer, mode: string, standardNote: string): Reada
 
 /** 上传 PDF 到 Moonshot 并取回解析后的文本内容（含扫描件 OCR / 表格还原） */
 async function moonshotExtract(buf: Buffer, filename: string): Promise<string> {
-  const key = process.env.MOONSHOT_API_KEY as string
+  const key = cleanKey(process.env.MOONSHOT_API_KEY)
   const form = new FormData()
   form.append('purpose', 'file-extract')
   form.append('file', new Blob([new Uint8Array(buf)], { type: 'application/pdf' }), filename || 'report.pdf')
