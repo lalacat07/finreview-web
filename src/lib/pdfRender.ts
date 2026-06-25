@@ -1,5 +1,3 @@
-import { pdf } from 'pdf-to-img'
-
 /**
  * 将 PDF 渲染为逐页图像（PNG 的 base64 data URI）。
  * 用于把 PDF 交给"只吃图片"的视觉模型（如 GLM-4.5V）逐页审阅，
@@ -14,6 +12,9 @@ export async function renderPdfToImages(
   opts: { maxPages?: number; scale?: number } = {}
 ): Promise<{ images: string[]; total: number; rendered: number }> {
   const { maxPages = 40, scale = 1.5 } = opts
+  // 动态导入：pdf-to-img 依赖原生 canvas，若该环境加载失败也只影响 GLM 渲染，
+  // 不会让整个 /api/analyze 路由在模块加载阶段崩溃（文本兜底路径仍可用）。
+  const { pdf } = await import('pdf-to-img')
   const doc = await pdf(buffer, { scale })
   const total = doc.length
   const images: string[] = []

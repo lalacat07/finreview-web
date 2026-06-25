@@ -216,7 +216,12 @@ export default function AnalyzePage() {
       analyzeForm.append('standard', standard)
       analyzeForm.append('pageCount', String(pageCount ?? ''))
       const analyzeRes = await fetch('/api/analyze', { method: 'POST', body: analyzeForm, signal })
-      if (!analyzeRes.ok) throw new Error('分析请求失败')
+      if (!analyzeRes.ok) {
+        const detail = await analyzeRes.text().catch(() => '')
+        throw new Error(
+          `分析请求失败（HTTP ${analyzeRes.status}）${detail ? '：' + detail.slice(0, 400) : ''}`
+        )
+      }
 
       // 阶段 4–6 随流式输出推进
       setCurrentStage('crosscheck')
