@@ -44,7 +44,18 @@ const glm = process.env.ZHIPUAI_API_KEY
 const GLM_MODEL = process.env.ZHIPU_MODEL || 'glm-4.5v'
 const GLM_MAX_PAGES = Number(process.env.GLM_MAX_PAGES || 40) // 渲染上限，超出忽略
 const GLM_PAGES_PER_CALL = Number(process.env.GLM_PAGES_PER_CALL || 8) // 单次请求页数（受 64K 上下文限制）
-// 视觉引擎显式选择：'glm' | 'claude'（留空=自动：有 GLM key 优先 GLM，其次 Claude）
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Kimi（Moonshot）路径：原生解析 PDF（含扫描件 OCR、表格还原），256K 长上下文，
+ * 无需服务端渲染——最适合长财报（如 200+ 页年报）。
+ * 流程：上传 PDF 到 /files(purpose=file-extract) → 取解析内容 → 长上下文模型流式复核。
+ * ────────────────────────────────────────────────────────────────────────────*/
+const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL || 'https://api.moonshot.cn/v1'
+const MOONSHOT_MODEL = process.env.MOONSHOT_MODEL || 'kimi-k2.5'
+const moonshot = process.env.MOONSHOT_API_KEY
+  ? new OpenAI({ apiKey: process.env.MOONSHOT_API_KEY, baseURL: MOONSHOT_BASE_URL })
+  : null
+
+// 视觉引擎显式选择：'kimi' | 'glm' | 'claude'（留空=自动：Kimi > GLM > Claude）
 const VISION_PROVIDER = (process.env.VISION_PROVIDER || '').toLowerCase()
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -533,6 +544,83 @@ function glmVisionStream(buf: Buffer, mode: string, standardNote: string): Reada
   })
 }
 
+/** 上传 PDF 到 Moonshot 并取回解析后的文本内容（含扫描件 OCR / 表格还原） */
+async function moonshotExtract(buf: Buffer, filename: string): Promise<string> {
+  const key = process.env.MOONSHOT_API_KEY as string
+  const form = new FormData()
+  form.append('purpose', 'file-extract')
+  form.append('file', new Blob([new Uint8Array(buf)], { type: 'application/pdf' }), filename || 'report.pdf')
+  const up = await fetch(`${MOONSHOT_BASE_URL}/files`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}` },
+    body: form,
+  })
+  if (!up.ok) throw new Error(`文件上传失败（${up.status}）：${(await up.text()).slice(0, 200)}`)
+  const upJson = (await up.json()) as { id?: string }
+  const fileId = upJson.id
+  if (!fileId) throw new Error('文件上传未返回 file id')
+  const cont = await fetch(`${MOONSHOT_BASE_URL}/files/${fileId}/content`, {
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  if (!cont.ok) throw new Error(`文件解析失败（${cont.status}）：${(await cont.text()).slice(0, 200)}`)
+  const raw = await cont.text()
+  try {
+    const j = JSON.parse(raw) as { content?: string; text?: string }
+    return j.content || j.text || raw
+  } catch {
+    return raw
+  }
+}
+
+/** Kimi 路径：解析 PDF→长上下文流式复核 */
+function moonshotStream(buf: Buffer, filename: string, mode: string, standardNote: string): ReadableStream {
+  const encoder = new TextEncoder()
+  return new ReadableStream({
+    async start(controller) {
+      try {
+        const content = await moonshotExtract(buf, filename)
+        if (!content.trim()) {
+          controller.enqueue(encoder.encode('分析失败（Kimi）：未能从该 PDF 解析出文本内容。'))
+          controller.close()
+          return
+        }
+        const userMessage =
+          mode === 'review'
+            ? `${standardNote}请对以下财务报告执行【报告总览 + 财务数据复核 + 语法核查】，逐表逐附注核验：\n\n${content}`
+            : mode === 'analysis'
+            ? `${standardNote}请对以下财务报告执行【财务健康度分析】：\n\n${content}`
+            : `${standardNote}请对以下财务报告同时输出以下四大模块（顺序严格）：
+1. ## 报告总览
+2. ## 财务数据复核
+3. ## 语法核查
+4. ## 财务健康度分析
+
+财务报告内容：
+
+${content}`
+        const stream = await moonshot!.chat.completions.create({
+          model: MOONSHOT_MODEL,
+          max_tokens: 8192,
+          stream: true,
+          messages: [
+            { role: 'system', content: systemFor(mode) },
+            { role: 'user', content: userMessage },
+          ],
+        })
+        for await (const chunk of stream) {
+          const t = chunk.choices[0]?.delta?.content
+          if (t) controller.enqueue(encoder.encode(t))
+        }
+        controller.close()
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        controller.enqueue(encoder.encode(`分析失败（Kimi 路径）：${msg}`))
+        controller.close()
+      }
+    },
+  })
+}
+
 export async function POST(request: NextRequest) {
   const blocked = guard(request, { limit: 15, windowMs: 60_000, name: 'analyze' })
   if (blocked) return blocked
@@ -545,6 +633,7 @@ export async function POST(request: NextRequest) {
     let pdfBuffer: Buffer | null = null
     let pdfBytes = 0
     let pageCount = 0
+    let fileName = 'report.pdf'
 
     if (ct.includes('multipart/form-data')) {
       const form = await request.formData()
@@ -558,6 +647,7 @@ export async function POST(request: NextRequest) {
         pdfBuffer = buf
         pdfBytes = buf.length
         pdfBase64 = buf.toString('base64')
+        if ((file as File).name) fileName = (file as File).name
       }
     } else {
       const body = await request.json()
@@ -576,14 +666,21 @@ export async function POST(request: NextRequest) {
      */
     const claudeFits =
       !!anthropic && !!pdfBase64 && pdfBytes <= VISION_MAX_BYTES && (pageCount === 0 || pageCount <= VISION_MAX_PAGES)
-    let engine: 'glm' | 'claude' | 'text' = 'text'
-    if (VISION_PROVIDER === 'glm' && glm && pdfBuffer) engine = 'glm'
+    let engine: 'kimi' | 'glm' | 'claude' | 'text' = 'text'
+    if (VISION_PROVIDER === 'kimi' && moonshot && pdfBuffer) engine = 'kimi'
+    else if (VISION_PROVIDER === 'glm' && glm && pdfBuffer) engine = 'glm'
     else if (VISION_PROVIDER === 'claude' && claudeFits) engine = 'claude'
     else if (!VISION_PROVIDER) {
-      if (glm && pdfBuffer) engine = 'glm'
+      if (moonshot && pdfBuffer) engine = 'kimi'
+      else if (glm && pdfBuffer) engine = 'glm'
       else if (claudeFits) engine = 'claude'
     }
 
+    if (engine === 'kimi') {
+      return new Response(moonshotStream(pdfBuffer!, fileName, mode, standardNote), {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      })
+    }
     if (engine === 'glm') {
       return new Response(glmVisionStream(pdfBuffer!, mode, standardNote), {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },

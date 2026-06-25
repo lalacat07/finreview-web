@@ -28,8 +28,9 @@
 一次复核内部：
 
 1. **`/api/extract`**：pdf-parse 抽文本（用于原文定位与文本回退路径），并返回页数等画像。
-2. **`/api/analyze`**：多引擎，按 key 自动择优（可用 `VISION_PROVIDER` 显式指定）：
-   - **GLM-4.5V 视觉路径（国内首选）**：配 `ZHIPUAI_API_KEY` 时启用。服务端用 `pdf-to-img` 把 PDF 逐页渲染成图像，按 GLM 64K 上下文分批（默认 8 页/批，最多 40 页）送 `glm-4.5v`（OpenAI 兼容端点）逐页"看"版面并合并；识别扫描件、保留表格行列，价格仅约 Claude 的 1/10。
+2. **`/api/analyze`**：多引擎，按 key 自动择优（优先级 Kimi > GLM > Claude > 文本；可用 `VISION_PROVIDER` 显式指定）：
+   - **Kimi 路径（长报告首选）**：配 `MOONSHOT_API_KEY` 时启用。把 PDF 上传到 Moonshot `/files`(purpose=file-extract) 原生解析（含扫描件 OCR、表格还原），再用 256K 长上下文模型（默认 `kimi-k2.5`）流式复核——无需渲染，最适合 200+ 页年报。
+   - **GLM-4.5V 视觉路径**：配 `ZHIPUAI_API_KEY` 时启用。服务端用 `pdf-to-img` 把 PDF 逐页渲染成图像，按 GLM 64K 上下文分批（默认 8 页/批，最多 40 页）送 `glm-4.5v` 逐页"看"版面并合并；适合中短报告，长报告会受 40 页上限截断。
    - **Claude 视觉路径**：配 `ANTHROPIC_API_KEY` 且 PDF ≤100 页 / ≤30MB 时，把 PDF 原件作为 document 块交给 Claude 原生读取。
    - **文本路径（兜底）**：无视觉 key 或 PDF 过大时，用 `pdf-parse` 抽文本送 DeepSeek / 火山方舟（长报告分块）。
    均流式产出「报告总览 + 数据复核 + 语法核查 + 财务健康度分析」（markdown）。
