@@ -929,7 +929,7 @@ export default function AnalyzePage() {
               上传确认
             </h2>
             <p style={{ color: TEXT_SECONDARY, fontSize: '13.5px', lineHeight: 1.7, marginBottom: '24px' }}>
-              请确认您有权上传此文件，并已了解：为完成分析，报告内容（含 PDF 原件）将通过网络发送至第三方大模型服务商（Anthropic Claude / DeepSeek / 火山方舟等）进行处理。我们不会主动留存您的报告，但无法对第三方服务商的数据处理作出担保。请勿上传涉密或未公开的敏感报告，内部草稿请先脱敏。
+              请确认您有权上传此文件，并已了解：为完成分析，报告内容（含 PDF 原件）将通过网络发送至第三方大模型服务商（智谱 GLM / Anthropic Claude / DeepSeek / 火山方舟等）进行处理。我们不会主动留存您的报告，但无法对第三方服务商的数据处理作出担保。请勿上传涉密或未公开的敏感报告，内部草稿请先脱敏。
             </p>
             <div style={{ display: 'flex', gap: '10px' }}>
               <button

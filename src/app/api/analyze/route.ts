@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import OpenAI from 'openai'
 import Anthropic from '@anthropic-ai/sdk'
 import { guard } from '@/lib/apiGuard'
+import { renderPdfToImages } from '@/lib/pdfRender'
 
 export const maxDuration = 300 // Vercel Pro 上限 300s；大报告分块分析需要更长时间
 export const dynamic = 'force-dynamic'
@@ -28,6 +29,23 @@ const VISION_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6'
 // Claude 单次请求 PDF 限制：≤100 页且 ≤32MB；超出则回退到纯文本路径
 const VISION_MAX_PAGES = 100
 const VISION_MAX_BYTES = 30 * 1024 * 1024
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * GLM-4.5V 视觉路径（国内多模态，OpenAI 兼容）
+ *  GLM 视觉接口只吃图片，故服务端先把 PDF 逐页渲染成图像，再分批送入模型。
+ *  GLM-4.5V 上下文 64K，单次只能放有限页数，故按 GLM_PAGES_PER_CALL 分批并合并。
+ * ────────────────────────────────────────────────────────────────────────────*/
+const glm = process.env.ZHIPUAI_API_KEY
+  ? new OpenAI({
+      apiKey: process.env.ZHIPUAI_API_KEY,
+      baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+    })
+  : null
+const GLM_MODEL = process.env.ZHIPU_MODEL || 'glm-4.5v'
+const GLM_MAX_PAGES = Number(process.env.GLM_MAX_PAGES || 40) // 渲染上限，超出忽略
+const GLM_PAGES_PER_CALL = Number(process.env.GLM_PAGES_PER_CALL || 8) // 单次请求页数（受 64K 上下文限制）
+// 视觉引擎显式选择：'glm' | 'claude'（留空=自动：有 GLM key 优先 GLM，其次 Claude）
+const VISION_PROVIDER = (process.env.VISION_PROVIDER || '').toLowerCase()
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * SYSTEM ROLE
@@ -437,6 +455,84 @@ function visionStream(base64: string, mode: string, standardNote: string): Reada
   })
 }
 
+/** GLM-4.5V 单次调用：一批页图 + 指令，非流式取最终内容 */
+async function glmComplete(systemPrompt: string, images: string[], instruction: string): Promise<string> {
+  const params = {
+    model: GLM_MODEL,
+    max_tokens: 8192,
+    stream: false,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      {
+        role: 'user',
+        content: [
+          ...images.map((url) => ({ type: 'image_url' as const, image_url: { url } })),
+          { type: 'text' as const, text: instruction },
+        ],
+      },
+    ],
+    // 关闭 GLM 思考模式：本场景只需最终结构化结论，省时延与 token
+    thinking: { type: 'disabled' },
+  }
+  const res = await glm!.chat.completions.create(
+    params as unknown as Parameters<OpenAI['chat']['completions']['create']>[0]
+  )
+  const r = res as unknown as { choices?: { message?: { content?: string } }[] }
+  return r.choices?.[0]?.message?.content || ''
+}
+
+/** GLM 视觉路径：服务端渲染 PDF→页图，按上下文限制分批审阅并合并，流式下发最终结果 */
+function glmVisionStream(buf: Buffer, mode: string, standardNote: string): ReadableStream {
+  const encoder = new TextEncoder()
+  return new ReadableStream({
+    async start(controller) {
+      try {
+        const { images, total, rendered } = await renderPdfToImages(buf, { maxPages: GLM_MAX_PAGES })
+        if (!images.length) {
+          controller.enqueue(encoder.encode('分析失败（GLM 视觉路径）：未能从该 PDF 渲染出页面图像。'))
+          controller.close()
+          return
+        }
+        // 分批（受 GLM 64K 上下文限制）
+        const batches: string[][] = []
+        for (let i = 0; i < images.length; i += GLM_PAGES_PER_CALL) {
+          batches.push(images.slice(i, i + GLM_PAGES_PER_CALL))
+        }
+        const want = (m: string) => mode === 'both' || mode === m
+
+        const reviewPromise: Promise<string> = want('review')
+          ? Promise.all(
+              batches.map((b, i) => {
+                const note =
+                  batches.length > 1
+                    ? `（注意：这是同一份报告的第 ${i + 1}/${batches.length} 部分页面图像。请仅就本部分页面执行复核，并照常输出"## 报告总览 / ## 财务数据复核 / ## 语法核查"结构；总览字段如本部分无法判断填"未披露"。）\n\n`
+                    : ''
+                return glmComplete(DATA_REVIEW_PROMPT, b, `${standardNote}${note}${visionInstruction('review', '')}`)
+              })
+            ).then((parts) => mergeReview(parts))
+          : Promise.resolve('')
+
+        // 健康度：在首批（通常含主要报表）上运行一次
+        const healthPromise: Promise<string> = want('analysis')
+          ? glmComplete(FINANCIAL_ANALYSIS_PROMPT, batches[0], `${standardNote}${visionInstruction('analysis', '')}`)
+          : Promise.resolve('')
+
+        const [reviewMd, healthMd] = await Promise.all([reviewPromise, healthPromise])
+        let head = ''
+        if (rendered < total) {
+          head = `> ⚠️ 本份报告共 ${total} 页，受模型上下文限制本次仅复核了前 ${rendered} 页。如需全量复核，请拆分报告或调大 GLM_MAX_PAGES。\n\n`
+        }
+        controller.enqueue(encoder.encode(head + [reviewMd, healthMd].filter(Boolean).join('\n\n')))
+        controller.close()
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        controller.enqueue(encoder.encode(`分析失败（GLM 视觉路径）：${msg}`))
+        controller.close()
+      }
+    },
+  })
+}
+
 export async function POST(request: NextRequest) {
   const blocked = guard(request, { limit: 15, windowMs: 60_000, name: 'analyze' })
   if (blocked) return blocked
@@ -446,6 +542,7 @@ export async function POST(request: NextRequest) {
     let mode = 'both'
     let standard = ''
     let pdfBase64 = ''
+    let pdfBuffer: Buffer | null = null
     let pdfBytes = 0
     let pageCount = 0
 
@@ -458,6 +555,7 @@ export async function POST(request: NextRequest) {
       const file = form.get('file')
       if (file && typeof file !== 'string') {
         const buf = Buffer.from(await (file as File).arrayBuffer())
+        pdfBuffer = buf
         pdfBytes = buf.length
         pdfBase64 = buf.toString('base64')
       }
@@ -472,19 +570,32 @@ export async function POST(request: NextRequest) {
       ? `用户指定的会计准则（如系统识别不同，请以本字段为准并在报告总览中注明）：${standard}\n\n`
       : '系统将自动识别报告适用准则。\n\n'
 
-    /* ── 视觉路径优先：配置 Anthropic 且 PDF 在限制内时，让 Claude 原生读 PDF ── */
-    const visionOK =
-      !!anthropic &&
-      !!pdfBase64 &&
-      pdfBytes <= VISION_MAX_BYTES &&
-      (pageCount === 0 || pageCount <= VISION_MAX_PAGES)
-    if (visionOK) {
+    /* ── 视觉引擎选择 ──
+     * 显式 VISION_PROVIDER 优先；留空时自动：有 GLM(国内) key 先用 GLM，其次 Claude。
+     * GLM：服务端渲染 PDF→页图分批审阅；Claude：原生读 PDF（≤100 页 / ≤30MB）。
+     */
+    const claudeFits =
+      !!anthropic && !!pdfBase64 && pdfBytes <= VISION_MAX_BYTES && (pageCount === 0 || pageCount <= VISION_MAX_PAGES)
+    let engine: 'glm' | 'claude' | 'text' = 'text'
+    if (VISION_PROVIDER === 'glm' && glm && pdfBuffer) engine = 'glm'
+    else if (VISION_PROVIDER === 'claude' && claudeFits) engine = 'claude'
+    else if (!VISION_PROVIDER) {
+      if (glm && pdfBuffer) engine = 'glm'
+      else if (claudeFits) engine = 'claude'
+    }
+
+    if (engine === 'glm') {
+      return new Response(glmVisionStream(pdfBuffer!, mode, standardNote), {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      })
+    }
+    if (engine === 'claude') {
       return new Response(visionStream(pdfBase64, mode, standardNote), {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       })
     }
 
-    /* ── 回退：纯文本路径（无 Anthropic key、PDF 过大/过长，或仅传入文本） ── */
+    /* ── 回退：纯文本路径（无视觉 key、PDF 过大/过长，或仅传入文本） ── */
     if (!text) return new Response('缺少报告文本', { status: 400 })
 
     const chunks = chunkText(text, CHAR_BUDGET)
