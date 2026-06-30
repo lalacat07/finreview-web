@@ -496,11 +496,32 @@ function visionInstruction(mode: string, standardNote: string): string {
 务必逐页审阅全部主表（合并及母公司单体）与全部附注，并直接基于版面核验表格的横向/纵向加总、跨页表格、千分位、零金额是否以"-"列示等格式细节。`
 }
 
+/** 心跳保活：立即刷新响应头，并在首字节到达前每 10s 发送一个零宽空格（U+200B），
+ * 防止"模型解析/思考期间长时间无输出"被 Vercel 边缘 / 代理 / VPN / 浏览器判定为空闲连接而断开
+ * （断开在前端表现为 "Failed to fetch"）。前端会过滤 ​，不影响最终内容。
+ * 返回停止函数，须在 close 前调用。 */
+function startHeartbeat(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: TextEncoder
+): () => void {
+  const beat = () => {
+    try {
+      controller.enqueue(encoder.encode('​'))
+    } catch {
+      /* 控制器已关闭，忽略 */
+    }
+  }
+  beat() // 立即发一个字节，促使响应头尽快下发，让前端 fetch 立刻 resolve
+  const timer = setInterval(beat, 10000)
+  return () => clearInterval(timer)
+}
+
 /** Claude 视觉路径：把 PDF 作为 document 块直接交给模型逐页审阅，流式返回 */
 function visionStream(base64: string, mode: string, standardNote: string): ReadableStream {
   const encoder = new TextEncoder()
   return new ReadableStream({
     async start(controller) {
+      const stopHb = startHeartbeat(controller, encoder)
       try {
         const stream = await anthropic!.messages.create({
           model: VISION_MODEL,
@@ -525,8 +546,10 @@ function visionStream(base64: string, mode: string, standardNote: string): Reada
             controller.enqueue(encoder.encode(event.delta.text))
           }
         }
+        stopHb()
         controller.close()
       } catch (e) {
+        stopHb()
         const msg = e instanceof Error ? e.message : String(e)
         controller.enqueue(encoder.encode(`分析失败（视觉路径）：${msg}`))
         controller.close()
@@ -566,9 +589,11 @@ function glmVisionStream(buf: Buffer, mode: string, standardNote: string): Reada
   const encoder = new TextEncoder()
   return new ReadableStream({
     async start(controller) {
+      const stopHb = startHeartbeat(controller, encoder)
       try {
         const { images, total, rendered } = await renderPdfToImages(buf, { maxPages: GLM_MAX_PAGES })
         if (!images.length) {
+          stopHb()
           controller.enqueue(encoder.encode('分析失败（GLM 视觉路径）：未能从该 PDF 渲染出页面图像。'))
           controller.close()
           return
@@ -602,9 +627,11 @@ function glmVisionStream(buf: Buffer, mode: string, standardNote: string): Reada
         if (rendered < total) {
           head = `> ⚠️ 本份报告共 ${total} 页，受模型上下文限制本次仅复核了前 ${rendered} 页。如需全量复核，请拆分报告或调大 GLM_MAX_PAGES。\n\n`
         }
+        stopHb()
         controller.enqueue(encoder.encode(head + [reviewMd, healthMd].filter(Boolean).join('\n\n')))
         controller.close()
       } catch (e) {
+        stopHb()
         const msg = e instanceof Error ? e.message : String(e)
         controller.enqueue(encoder.encode(`分析失败（GLM 视觉路径）：${msg}`))
         controller.close()
@@ -646,9 +673,11 @@ function moonshotStream(buf: Buffer, filename: string, mode: string, standardNot
   const encoder = new TextEncoder()
   return new ReadableStream({
     async start(controller) {
+      const stopHb = startHeartbeat(controller, encoder)
       try {
         const content = await moonshotExtract(buf, filename)
         if (!content.trim()) {
+          stopHb()
           controller.enqueue(encoder.encode('分析失败（Kimi）：未能从该 PDF 解析出文本内容。'))
           controller.close()
           return
@@ -676,12 +705,18 @@ ${content}`
             { role: 'user', content: userMessage },
           ],
         })
+        let firstByte = true
         for await (const chunk of stream) {
           const t = chunk.choices[0]?.delta?.content
-          if (t) controller.enqueue(encoder.encode(t))
+          if (t) {
+            if (firstByte) { stopHb(); firstByte = false }
+            controller.enqueue(encoder.encode(t))
+          }
         }
+        stopHb()
         controller.close()
       } catch (e) {
+        stopHb()
         const msg = e instanceof Error ? e.message : String(e)
         controller.enqueue(encoder.encode(`分析失败（Kimi 路径）：${msg}`))
         controller.close()

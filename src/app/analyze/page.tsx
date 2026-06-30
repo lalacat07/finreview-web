@@ -131,7 +131,7 @@ export default function AnalyzePage() {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        full += decoder.decode(value)
+        full += decoder.decode(value).replace(/​/g, '')
       }
 
       await saveReport({
@@ -235,7 +235,9 @@ export default function AnalyzePage() {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        const chunk = decoder.decode(value)
+        // 过滤服务端心跳保活字节（零宽空格 U+200B），不计入正文
+        const chunk = decoder.decode(value).replace(/​/g, '')
+        if (!chunk) continue
         full += chunk
         setStreamedText(full)
 
