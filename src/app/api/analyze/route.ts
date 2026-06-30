@@ -686,7 +686,37 @@ async function moonshotExtract(buf: Buffer, filename: string): Promise<string> {
   }
 }
 
-/** Kimi 路径：解析 PDF→长上下文流式复核 */
+/** Kimi 非流式单次调用（分章节复核时使用） */
+async function moonshotComplete(system: string, user: string): Promise<string> {
+  const res = await moonshot!.chat.completions.create({
+    model: MOONSHOT_MODEL,
+    max_tokens: Number(process.env.MOONSHOT_MAX_TOKENS || 16384),
+    stream: false,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+  })
+  return res.choices?.[0]?.message?.content || ''
+}
+
+/** 限并发地按序映射（规避新账号 RPM/并发限流，同时控制墙钟时间） */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const ret: R[] = new Array(items.length)
+  let idx = 0
+  const worker = async () => {
+    while (idx < items.length) {
+      const i = idx++
+      ret[i] = await fn(items[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker))
+  return ret
+}
+
+/** Kimi 路径：解析 PDF→长上下文复核。
+ *  短报告：单次流式（实时体验）；长报告：分章节逐段完整复核 + 合并，
+ *  并把主表作为共享上下文前置到每段，保证跨表勾稽不因分段而丢失。 */
 function moonshotStream(buf: Buffer, filename: string, mode: string, standardNote: string): ReadableStream {
   const encoder = new TextEncoder()
   return new ReadableStream({
@@ -700,12 +730,19 @@ function moonshotStream(buf: Buffer, filename: string, mode: string, standardNot
           controller.close()
           return
         }
-        const userMessage =
-          mode === 'review'
-            ? `${standardNote}请对以下财务报告执行【报告总览 + 财务数据复核 + 语法核查】，逐表逐附注核验：\n\n${content}`
-            : mode === 'analysis'
-            ? `${standardNote}请对以下财务报告执行【财务健康度分析】：\n\n${content}`
-            : `${standardNote}请对以下财务报告同时输出以下四大模块（顺序严格）：
+
+        const SECTION = Number(process.env.KIMI_SECTION_CHARS || 55000)
+        const sections = chunkText(content, SECTION)
+        const want = (m: string) => mode === 'both' || mode === m
+
+        /* ── 短报告（单段）：保留实时流式 ── */
+        if (sections.length === 1) {
+          const userMessage =
+            mode === 'review'
+              ? `${standardNote}请对以下财务报告执行【报告总览 + 财务数据复核 + 语法核查】，逐表逐附注核验：\n\n${content}`
+              : mode === 'analysis'
+              ? `${standardNote}请对以下财务报告执行【财务健康度分析】：\n\n${content}`
+              : `${standardNote}请对以下财务报告同时输出以下四大模块（顺序严格）：
 1. ## 报告总览
 2. ## 财务数据复核
 3. ## 语法核查
@@ -714,25 +751,57 @@ function moonshotStream(buf: Buffer, filename: string, mode: string, standardNot
 财务报告内容：
 
 ${content}`
-        const stream = await moonshot!.chat.completions.create({
-          model: MOONSHOT_MODEL,
-          // 长报告问题多，输出需更大额度以尽量完整列举（可用 MOONSHOT_MAX_TOKENS 调整）
-          max_tokens: Number(process.env.MOONSHOT_MAX_TOKENS || 16384),
-          stream: true,
-          messages: [
-            { role: 'system', content: systemFor(mode) },
-            { role: 'user', content: userMessage },
-          ],
-        })
-        let firstByte = true
-        for await (const chunk of stream) {
-          const t = chunk.choices[0]?.delta?.content
-          if (t) {
-            if (firstByte) { stopHb(); firstByte = false }
-            controller.enqueue(encoder.encode(t))
+          const stream = await moonshot!.chat.completions.create({
+            model: MOONSHOT_MODEL,
+            max_tokens: Number(process.env.MOONSHOT_MAX_TOKENS || 16384),
+            stream: true,
+            messages: [
+              { role: 'system', content: systemFor(mode) },
+              { role: 'user', content: userMessage },
+            ],
+          })
+          let firstByte = true
+          for await (const chunk of stream) {
+            const t = chunk.choices[0]?.delta?.content
+            if (t) {
+              if (firstByte) { stopHb(); firstByte = false }
+              controller.enqueue(encoder.encode(t))
+            }
           }
+          stopHb()
+          controller.close()
+          return
         }
+
+        /* ── 长报告：分章节逐段完整复核 + 合并 ── */
+        const ANCHOR = Number(process.env.KIMI_ANCHOR_CHARS || 32000)
+        const CONC = Number(process.env.KIMI_CONCURRENCY || 3)
+        const anchor = content.slice(0, ANCHOR) // 主表通常位于报告前部
+
+        const reviewPromise: Promise<string> = want('review')
+          ? mapLimit(sections, CONC, (sec, i) => {
+              const body =
+                i === 0
+                  ? sec
+                  : `【主表上下文（仅供跨表勾稽参照，请勿重复列出此处的问题）】\n${anchor}\n\n【需复核的本部分内容（第 ${i + 1}/${sections.length} 部分）】\n${sec}`
+              const note = `（注意：这是同一份报告的第 ${i + 1}/${sections.length} 部分。请仅就"本部分"内容执行复核，并【完整、无遗漏地逐处列出】本部分的所有问题（同类问题在不同行/不同表重复出现也要逐处列，标注页码/表名/附注号）；照常输出"## 报告总览 / ## 财务数据复核 / ## 语法核查"结构；跨表勾稽可参照上方主表上下文。）\n\n`
+              return moonshotComplete(
+                systemFor('review'),
+                `${standardNote}${note}请对以下财务报告（部分）执行【报告总览 + 财务数据复核 + 语法核查】：\n\n${body}`
+              )
+            }).then((parts) => mergeReview(parts))
+          : Promise.resolve('')
+
+        const healthPromise: Promise<string> = want('analysis')
+          ? moonshotComplete(
+              systemFor('analysis'),
+              `${standardNote}（注意：报告较长，以下为其主要财务报表所在的前置部分，请基于可见数据进行健康度分析，数据不足处标注 N/A。）\n\n请对以下财务报告文本执行【财务健康度分析】：\n\n${sections[0]}`
+            )
+          : Promise.resolve('')
+
+        const [reviewMd, healthMd] = await Promise.all([reviewPromise, healthPromise])
         stopHb()
+        controller.enqueue(encoder.encode([reviewMd, healthMd].filter(Boolean).join('\n\n')))
         controller.close()
       } catch (e) {
         stopHb()
