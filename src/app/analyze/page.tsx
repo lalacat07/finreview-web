@@ -133,6 +133,7 @@ export default function AnalyzePage() {
         if (done) break
         full += decoder.decode(value).replace(/​/g, '')
       }
+      if (!full.trim()) return 'error'
 
       await saveReport({
         id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
@@ -250,6 +251,14 @@ export default function AnalyzePage() {
           setCurrentStage('compose')
           advanced6 = true
         }
+      }
+
+      // 空结果保护：若流结束后正文为空（多为服务器单次处理超时被中断，或模型返回为空），
+      // 不要跳到空白结果页，改为明确报错并停留，便于重试/定位。
+      if (!full.trim()) {
+        throw new Error(
+          '分析未返回内容。常见原因：①长报告（数百页）超出服务器单次处理时限被中断；②所用大模型返回为空或模型名不可用。建议：重试；若持续，请缩短报告页数，或在部署环境变量中将 MOONSHOT_MODEL 设为账号可用的长上下文模型。'
+        )
       }
 
       const reportId =
