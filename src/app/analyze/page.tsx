@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import TopNav from '@/components/TopNav'
 import { saveReport } from '@/lib/history'
+import { chunkText, mergeReview } from '@/lib/reviewMerge'
 import {
   BRAND, BRAND_LIGHT, BRAND_TINT, BRAND_STRONG,
   BORDER, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
@@ -38,6 +39,7 @@ export default function AnalyzePage() {
   const [showStandard, setShowStandard] = useState(false) // 高级：手动覆盖
   const [stage, setStage] = useState<Stage>('upload')
   const [currentStage, setCurrentStage] = useState<StageKey>('upload')
+  const [partProgress, setPartProgress] = useState<{ i: number; n: number } | null>(null)
   const [streamedText, setStreamedText] = useState('')
   const [error, setError] = useState('')
   const [dragOver, setDragOver] = useState(false)
@@ -106,35 +108,132 @@ export default function AnalyzePage() {
     setShowModal(true)
   }
 
+  /** 读取一次 /api/analyze 的 JSON 文本请求（单段），返回完整文本（过滤心跳字节） */
+  const postAnalyze = async (
+    body: string,
+    m: Mode,
+    signal: AbortSignal
+  ): Promise<string> => {
+    const r = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: body, mode: m, standard }),
+      signal,
+    })
+    if (!r.ok) {
+      const d = await r.text().catch(() => '')
+      throw new Error(`分析请求失败（HTTP ${r.status}）${d ? '：' + d.slice(0, 300) : ''}`)
+    }
+    const reader = r.body!.getReader()
+    const decoder = new TextDecoder()
+    let s = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      s += decoder.decode(value).replace(/​/g, '')
+    }
+    return s
+  }
+
+  /**
+   * 核心：分段编排复核（Hobby 免费版友好——每次服务端调用只处理一段，均 <60s）。
+   * 1) /api/extract 取元数据 + pdf-parse 文本；再试 /api/kimi-extract 取更高质量文本（失败回退）。
+   * 2) 前端把文本切分成多段，主表(前部)作为共享上下文前置到每段。
+   * 3) 逐段（限并发2）请求 /api/analyze 做复核，再单独请求一次健康度；前端合并成单一结果。
+   */
+  const analyzeReport = async (
+    f: File,
+    signal: AbortSignal,
+    onStage?: (s: StageKey, prog?: { i: number; n: number }) => void
+  ): Promise<{ full: string; pageCount: number | null; charCount: number | null; truncated: boolean; sourceText: string }> => {
+    onStage?.('upload')
+    const exForm = new FormData()
+    exForm.append('file', f)
+    const extractRes = await fetch('/api/extract', { method: 'POST', body: exForm, signal })
+    if (!extractRes.ok) {
+      const b = await extractRes.json().catch(() => ({}))
+      throw new Error(b.error || 'PDF 解析失败')
+    }
+    const { text: pdfText, pageCount, charCount, truncated } = await extractRes.json()
+
+    // 尝试用 Kimi 原生解析获得更高质量文本（含扫描件 OCR / 表格还原）；失败则回退 pdf-parse
+    onStage?.('extract')
+    let text: string = pdfText || ''
+    try {
+      const kForm = new FormData()
+      kForm.append('file', f)
+      const kRes = await fetch('/api/kimi-extract', { method: 'POST', body: kForm, signal })
+      if (kRes.ok) {
+        const kj = await kRes.json()
+        if (kj.text && String(kj.text).trim()) text = kj.text
+      }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') throw e
+      /* 回退 pdfText */
+    }
+    if (!text.trim()) {
+      throw new Error('未能从该 PDF 提取到文本内容（可能是扫描件/图片版）。请改用带可复制文本的 PDF，或在 Pro 环境启用视觉路径。')
+    }
+
+    // 段偏小：每段单次调用（含输出生成）需在 Vercel 免费版 ~60s 内完成，
+    // 段越小、单次输出越短越安全；段数增多由前端多次请求承担，不受单函数时限约束。
+    const SECTION = 30000
+    const chunks = chunkText(text, SECTION)
+    const anchor = text.slice(0, 20000)
+    const sourceText = String(text).slice(0, 200000)
+
+    let full = ''
+    if (chunks.length === 1) {
+      onStage?.('crosscheck')
+      full = await postAnalyze(chunks[0], mode, signal)
+    } else {
+      const want = (m: Mode) => mode === 'both' || mode === m
+      // 复核：逐段（限并发2），每段完整列出本段问题；主表前置供跨表勾稽
+      let reviewMd = ''
+      if (want('review')) {
+        const parts: string[] = new Array(chunks.length).fill('')
+        let idx = 0
+        let done = 0
+        const worker = async () => {
+          while (idx < chunks.length) {
+            const i = idx++
+            const note = `（说明：这是同一份报告的第 ${i + 1}/${chunks.length} 部分。请仅就"本部分"内容执行复核，并【完整、逐处列出】本部分所有问题，标注页码/表名/附注号；跨表勾稽可参照下方"主表上下文"。照常输出"## 报告总览 / ## 财务数据复核 / ## 语法核查"结构。）`
+            const body =
+              i === 0
+                ? `${note}\n\n${chunks[i]}`
+                : `${note}\n\n【主表上下文（仅供跨表勾稽参照，请勿重复列出此处的问题）】\n${anchor}\n\n【需复核的本部分内容】\n${chunks[i]}`
+            parts[i] = await postAnalyze(body, 'review', signal)
+            done++
+            onStage?.('crosscheck', { i: done, n: chunks.length })
+          }
+        }
+        await Promise.all([worker(), worker()])
+        reviewMd = mergeReview(parts)
+      }
+      // 健康度：基于首段（主表所在）单独一次
+      let healthMd = ''
+      if (want('analysis')) {
+        onStage?.('risk')
+        healthMd = await postAnalyze(chunks[0], 'analysis', signal)
+      }
+      onStage?.('compose')
+      full = [reviewMd, healthMd].filter(Boolean).join('\n\n')
+    }
+
+    return {
+      full,
+      pageCount: pageCount ?? null,
+      charCount: charCount ?? null,
+      truncated: !!truncated,
+      sourceText,
+    }
+  }
+
   /** 处理单份文件（不跳转，仅存档到历史）。用于批量模式。返回 'ok' | 'error' */
   const processOneFile = async (f: File, signal: AbortSignal): Promise<'ok' | 'error'> => {
     try {
-      const formData = new FormData()
-      formData.append('file', f)
-      const extractRes = await fetch('/api/extract', { method: 'POST', body: formData, signal })
-      if (!extractRes.ok) return 'error'
-      const { text, pageCount, charCount, truncated } = await extractRes.json()
-
-      // 优先把 PDF 原件交给后端视觉路径（Claude 原生读 PDF，支持扫描件并保留表格版面）；
-      // 同时附上抽取文本，后端在无视觉能力或 PDF 过大时自动回退到文本路径。
-      const analyzeForm = new FormData()
-      analyzeForm.append('file', f)
-      analyzeForm.append('text', text || '')
-      analyzeForm.append('mode', mode)
-      analyzeForm.append('standard', standard)
-      analyzeForm.append('pageCount', String(pageCount ?? ''))
-      const analyzeRes = await fetch('/api/analyze', { method: 'POST', body: analyzeForm, signal })
-      if (!analyzeRes.ok) return 'error'
-      const reader = analyzeRes.body!.getReader()
-      const decoder = new TextDecoder()
-      let full = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        full += decoder.decode(value).replace(/​/g, '')
-      }
+      const { full, pageCount, charCount, truncated, sourceText } = await analyzeReport(f, signal)
       if (!full.trim()) return 'error'
-
       await saveReport({
         id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
         ts: Date.now(),
@@ -143,8 +242,8 @@ export default function AnalyzePage() {
         standard,
         result: full,
         figures: '',
-        sourceText: String(text).slice(0, 200000),
-        scope: { pageCount: pageCount ?? null, charCount: charCount ?? null, truncated: !!truncated },
+        sourceText,
+        scope: { pageCount, charCount, truncated },
       })
       return 'ok'
     } catch (e) {
@@ -158,6 +257,7 @@ export default function AnalyzePage() {
     if (files.length === 0) return
     setError('')
     setStreamedText('')
+    setPartProgress(null)
     setStage('streaming')
     setCurrentStage('upload')
 
@@ -188,76 +288,21 @@ export default function AnalyzePage() {
     }
 
     try {
-      // 阶段 1：上传并读取
-      setCurrentStage('upload')
-      const formData = new FormData()
-      formData.append('file', file)
-      const extractRes = await fetch('/api/extract', { method: 'POST', body: formData, signal })
-      if (!extractRes.ok) {
-        const body = await extractRes.json().catch(() => ({}))
-        throw new Error(body.error || 'PDF 解析失败')
-      }
-      const { text, pageCount, charCount, truncated } = await extractRes.json()
-
-      // 阶段 2：识别结构（短暂展示）
-      setCurrentStage('structure')
-      await sleep(450)
-
-      // 阶段 3：提取数据
-      setCurrentStage('extract')
-      await sleep(450)
-
-      // 启动流式分析：优先把 PDF 原件交给后端视觉路径（Claude 原生读 PDF，
-      // 可识别扫描件/图片型报告并保留表格版面），并附带抽取文本供后端在无视觉
-      // 能力或 PDF 过大时回退到文本路径。
-      const analyzeForm = new FormData()
-      analyzeForm.append('file', file)
-      analyzeForm.append('text', text || '')
-      analyzeForm.append('mode', mode)
-      analyzeForm.append('standard', standard)
-      analyzeForm.append('pageCount', String(pageCount ?? ''))
-      const analyzeRes = await fetch('/api/analyze', { method: 'POST', body: analyzeForm, signal })
-      if (!analyzeRes.ok) {
-        const detail = await analyzeRes.text().catch(() => '')
-        throw new Error(
-          `分析请求失败（HTTP ${analyzeRes.status}）${detail ? '：' + detail.slice(0, 400) : ''}`
-        )
-      }
-
-      // 阶段 4–6 随流式输出推进
-      setCurrentStage('crosscheck')
-
-      const reader = analyzeRes.body!.getReader()
-      const decoder = new TextDecoder()
-      let full = ''
-      let advanced5 = false
-      let advanced6 = false
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        // 过滤服务端心跳保活字节（零宽空格 U+200B），不计入正文
-        const chunk = decoder.decode(value).replace(/​/g, '')
-        if (!chunk) continue
-        full += chunk
-        setStreamedText(full)
-
-        // 阶段推进：根据已生成内容粗略推断
-        if (!advanced5 && (full.includes('财务数据复核') || full.length > 1200)) {
-          setCurrentStage('risk')
-          advanced5 = true
+      // 分段编排复核（每次服务端调用只处理一段，兼容 Vercel 免费版 60s 限制）。
+      // 进度阶段由 analyzeReport 通过 onStage 回调推进；多段时显示"第 i/n 部分"。
+      const { full, pageCount, charCount, truncated, sourceText: sourceSlice } = await analyzeReport(
+        file,
+        signal,
+        (s, prog) => {
+          setCurrentStage(s)
+          if (prog) setPartProgress(prog)
         }
-        if (!advanced6 && (full.includes('财务健康度分析') || full.length > 3000)) {
-          setCurrentStage('compose')
-          advanced6 = true
-        }
-      }
+      )
 
-      // 空结果保护：若流结束后正文为空（多为服务器单次处理超时被中断，或模型返回为空），
-      // 不要跳到空白结果页，改为明确报错并停留，便于重试/定位。
+      // 空结果保护：正文为空时不跳空白结果页，改为明确报错并停留。
       if (!full.trim()) {
         throw new Error(
-          '分析未返回内容。常见原因：①长报告（数百页）超出服务器单次处理时限被中断；②所用大模型返回为空或模型名不可用。建议：重试；若持续，请缩短报告页数，或在部署环境变量中将 MOONSHOT_MODEL 设为账号可用的长上下文模型。'
+          '分析未返回内容。常见原因：①所用大模型返回为空或模型名不可用；②网络/额度问题。建议重试；若持续，请在部署环境变量中将 MOONSHOT_MODEL 设为账号可用的长上下文模型。'
         )
       }
 
@@ -269,7 +314,6 @@ export default function AnalyzePage() {
         charCount: charCount ?? null,
         truncated: !!truncated,
       }
-      const sourceSlice = String(text).slice(0, 200000)
 
       sessionStorage.setItem('analysisResult', full)
       sessionStorage.setItem('analysisId', reportId)
@@ -316,6 +360,7 @@ export default function AnalyzePage() {
     abortRef.current = null
     setStage('upload')
     setStreamedText('')
+    setPartProgress(null)
     setFiles([])
     setBatchProgress(null)
     setError('')
@@ -413,6 +458,7 @@ export default function AnalyzePage() {
               </div>
               <div style={{ fontSize: '13px', color: TEXT_MUTED }}>
                 文件：{file?.name} · 已处理 {elapsed}s
+                {partProgress ? ` · 分段复核 ${partProgress.i}/${partProgress.n}` : ''}
               </div>
             </div>
             <button
@@ -1106,8 +1152,4 @@ function Spinner({ size = 18 }: { size?: number }) {
       <path d="M21 12a9 9 0 0 0-9-9" stroke={BRAND_LIGHT} strokeWidth="2.5" fill="none" strokeLinecap="round" />
     </svg>
   )
-}
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms))
 }

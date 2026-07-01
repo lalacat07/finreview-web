@@ -3,12 +3,11 @@ import OpenAI from 'openai'
 import Anthropic from '@anthropic-ai/sdk'
 import { guard } from '@/lib/apiGuard'
 import { renderPdfToImages } from '@/lib/pdfRender'
+import { moonshotExtract, MOONSHOT_BASE_URL, cleanKey } from '@/lib/kimi'
+import { chunkText, mergeReview } from '@/lib/reviewMerge'
 
 export const maxDuration = 300 // Vercel Pro 上限 300s；大报告分块分析需要更长时间
 export const dynamic = 'force-dynamic'
-
-/** 清洗 API key：去掉换行/空格等空白字符（防止环境变量误带换行导致 Header 非法） */
-const cleanKey = (k?: string) => (k || '').replace(/\s/g, '')
 
 const client = new OpenAI({
   apiKey: cleanKey(process.env.DEEPSEEK_API_KEY || process.env.ARK_API_KEY),
@@ -52,11 +51,15 @@ const GLM_PAGES_PER_CALL = Number(process.env.GLM_PAGES_PER_CALL || 8) // 单次
  * 无需服务端渲染——最适合长财报（如 200+ 页年报）。
  * 流程：上传 PDF 到 /files(purpose=file-extract) → 取解析内容 → 长上下文模型流式复核。
  * ────────────────────────────────────────────────────────────────────────────*/
-const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL || 'https://api.moonshot.cn/v1'
 const MOONSHOT_MODEL = process.env.MOONSHOT_MODEL || 'kimi-k2.5'
 const moonshot = process.env.MOONSHOT_API_KEY
   ? new OpenAI({ apiKey: cleanKey(process.env.MOONSHOT_API_KEY), baseURL: MOONSHOT_BASE_URL })
   : null
+
+/* JSON 文本路径的引擎：优先 Kimi(256K，配合前端分段每次仅处理一段)，否则 DeepSeek/火山。 */
+const textClient = moonshot || client
+const textModel = moonshot ? MOONSHOT_MODEL : MODEL
+const textMaxTokens = moonshot ? Number(process.env.MOONSHOT_MAX_TOKENS || 16384) : 8192
 
 // 视觉引擎显式选择：'kimi' | 'glm' | 'claude'（留空=自动：Kimi > GLM > Claude）
 const VISION_PROVIDER = (process.env.VISION_PROVIDER || '').toLowerCase()
@@ -398,41 +401,15 @@ const FINANCIAL_ANALYSIS_PROMPT = `${SYSTEM_ROLE}
  * Route handler
  * ────────────────────────────────────────────────────────────────────────────*/
 
-/* 单次调用的字符预算：按模型上下文保守取值。
- * deepseek-chat 上下文较大，可放宽；doubao-32k 较小，取较保守值。 */
-const CHAR_BUDGET = process.env.DEEPSEEK_API_KEY ? 90000 : 28000
+/* 单次调用的字符预算：Kimi(256K) 放很大，使前端已分好的单段不会被服务端再次切分；
+ * 否则按 DeepSeek/豆包上下文保守取值。 */
+const CHAR_BUDGET = moonshot ? 200000 : process.env.DEEPSEEK_API_KEY ? 90000 : 28000
 
-/** 将长文本按段落边界切分为不超过 budget 的块 */
-function chunkText(text: string, budget: number): string[] {
-  if (text.length <= budget) return [text]
-  const chunks: string[] = []
-  const paras = text.split(/\n{2,}/)
-  let buf = ''
-  for (const p of paras) {
-    if (buf.length + p.length + 2 > budget && buf) {
-      chunks.push(buf)
-      buf = ''
-    }
-    // 单段本身超长时硬切
-    if (p.length > budget) {
-      if (buf) {
-        chunks.push(buf)
-        buf = ''
-      }
-      for (let i = 0; i < p.length; i += budget) chunks.push(p.slice(i, i + budget))
-      continue
-    }
-    buf += (buf ? '\n\n' : '') + p
-  }
-  if (buf) chunks.push(buf)
-  return chunks
-}
-
-/** 非流式获取一次完整 completion 文本 */
+/** 非流式获取一次完整 completion 文本（文本引擎：Kimi 优先，否则 DeepSeek/火山） */
 async function complete(systemPrompt: string, userMessage: string): Promise<string> {
-  const res = await client.chat.completions.create({
-    model: MODEL,
-    max_tokens: 8192,
+  const res = await textClient.chat.completions.create({
+    model: textModel,
+    max_tokens: textMaxTokens,
     stream: false,
     messages: [
       { role: 'system', content: systemPrompt },
@@ -440,56 +417,6 @@ async function complete(systemPrompt: string, userMessage: string): Promise<stri
     ],
   })
   return res.choices[0]?.message?.content || ''
-}
-
-/** 从一段复核 markdown 中提取 ## 财务数据复核 下的 #### 问题卡片块 */
-function extractIssueCards(md: string, section: string): string[] {
-  const re = new RegExp(`##\\s+${section}([\\s\\S]*?)(?=\\n##\\s|$)`)
-  const m = md.match(re)
-  if (!m) return []
-  const body = m[1]
-  return body.split(/(?=^####\s)/m).filter((b) => /^####\s/.test(b.trim()))
-}
-
-/** 重新编号问题卡片标题（#### 问题 N：xxx / #### 语法问题 N：xxx） */
-function renumberCards(cards: string[], prefix: string): string {
-  return cards
-    .map((c, i) =>
-      c.replace(/^####\s+.*?(?=[:：])/m, `#### ${prefix} ${i + 1}`).trim()
-    )
-    .join('\n\n')
-}
-
-/** 多块复核结果合并为单一 markdown（总览/语法概述取首块，问题卡片全量合并） */
-function mergeReview(parts: string[]): string {
-  if (parts.length === 1) return parts[0]
-  const first = parts[0]
-  // 收集所有块的问题卡片
-  const dataCards: string[] = []
-  const grammarCards: string[] = []
-  parts.forEach((p) => {
-    dataCards.push(...extractIssueCards(p, '财务数据复核'))
-    grammarCards.push(...extractIssueCards(p, '语法核查'))
-  })
-
-  // 以首块为骨架，替换两个"需关注事项"区的卡片内容
-  const overviewMatch = first.match(/(##\s+报告总览[\s\S]*?)(?=\n##\s)/)
-  const overview = overviewMatch ? overviewMatch[1].trim() : ''
-
-  const dataScopeMatch = first.match(/##\s+财务数据复核([\s\S]*?)###\s+需关注事项/)
-  const dataHead = dataScopeMatch ? `## 财务数据复核${dataScopeMatch[1]}### 需关注事项` : '## 财务数据复核\n\n### 需关注事项'
-
-  const grammarScopeMatch = first.match(/##\s+语法核查([\s\S]*?)###\s+需关注事项/)
-  const grammarHead = grammarScopeMatch ? `## 语法核查${grammarScopeMatch[1]}### 需关注事项` : '## 语法核查\n\n### 需关注事项'
-
-  const dataBody = dataCards.length
-    ? '\n\n' + renumberCards(dataCards, '问题')
-    : '\n\n✅ 本次复核未发现明显的数据勾稽异常或披露不一致问题。'
-  const grammarBody = grammarCards.length
-    ? '\n\n' + renumberCards(grammarCards, '语法问题')
-    : '\n\n✅ 语言合规性检查未发现明显问题。'
-
-  return [overview, dataHead + dataBody, grammarHead + grammarBody].filter(Boolean).join('\n\n')
 }
 
 /** 按模式选择 system prompt */
@@ -656,34 +583,6 @@ function glmVisionStream(buf: Buffer, mode: string, standardNote: string): Reada
       }
     },
   })
-}
-
-/** 上传 PDF 到 Moonshot 并取回解析后的文本内容（含扫描件 OCR / 表格还原） */
-async function moonshotExtract(buf: Buffer, filename: string): Promise<string> {
-  const key = cleanKey(process.env.MOONSHOT_API_KEY)
-  const form = new FormData()
-  form.append('purpose', 'file-extract')
-  form.append('file', new Blob([new Uint8Array(buf)], { type: 'application/pdf' }), filename || 'report.pdf')
-  const up = await fetch(`${MOONSHOT_BASE_URL}/files`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}` },
-    body: form,
-  })
-  if (!up.ok) throw new Error(`文件上传失败（${up.status}）：${(await up.text()).slice(0, 200)}`)
-  const upJson = (await up.json()) as { id?: string }
-  const fileId = upJson.id
-  if (!fileId) throw new Error('文件上传未返回 file id')
-  const cont = await fetch(`${MOONSHOT_BASE_URL}/files/${fileId}/content`, {
-    headers: { Authorization: `Bearer ${key}` },
-  })
-  if (!cont.ok) throw new Error(`文件解析失败（${cont.status}）：${(await cont.text()).slice(0, 200)}`)
-  const raw = await cont.text()
-  try {
-    const j = JSON.parse(raw) as { content?: string; text?: string }
-    return j.content || j.text || raw
-  } catch {
-    return raw
-  }
 }
 
 /** Kimi 非流式单次调用（分章节复核时使用） */
@@ -913,9 +812,9 @@ export async function POST(request: NextRequest) {
 ${text}`
       }
 
-      const stream = await client.chat.completions.create({
-        model: MODEL,
-        max_tokens: 8192,
+      const stream = await textClient.chat.completions.create({
+        model: textModel,
+        max_tokens: textMaxTokens,
         stream: true,
         messages: [
           { role: 'system', content: systemPrompt },
@@ -924,10 +823,16 @@ ${text}`
       })
       const readable = new ReadableStream({
         async start(controller) {
+          const stopHb = startHeartbeat(controller, encoder)
+          let firstByte = true
           for await (const chunk of stream) {
             const t = chunk.choices[0]?.delta?.content
-            if (t) controller.enqueue(encoder.encode(t))
+            if (t) {
+              if (firstByte) { stopHb(); firstByte = false }
+              controller.enqueue(encoder.encode(t))
+            }
           }
+          stopHb()
           controller.close()
         },
       })
